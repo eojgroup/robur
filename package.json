@@ -9,7 +9,7 @@
     "dev:web": "pnpm --filter @robur/web dev",
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm --filter @robur/core build && pnpm -r --if-present typecheck",
-    "test": "pnpm -r --if-present test",
+    "test": "pnpm -r --if-present test && node --test scripts/ci-repair-agent.test.mjs",
     "apple:generate": "cd apps/mobile/ios && ruby generate_xcodeproj.rb",
     "apple:beta": "cd apps/mobile/ios && bundle exec fastlane ios beta",
     "infra:fmt": "terraform -chdir=infra/gcp/terraform fmt -recursive",

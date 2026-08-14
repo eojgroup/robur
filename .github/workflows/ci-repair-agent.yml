@@ -1,0 +1,151 @@
+name: CI Repair Agent
+
+on:
+  workflow_run:
+    workflows:
+      - Robur CI
+      - Build Apple clients
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Failed GitHub Actions run ID to inspect under the same trust policy"
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: ci-repair-${{ github.event.workflow_run.id || inputs.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    # workflow_run has write credentials, so do not run repairs for pull requests, forks, or
+    # arbitrary branches. Manual dispatch still passes through the same Node trust check below.
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'failure' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == github.event.repository.default_branch &&
+       github.event.workflow_run.head_repository.full_name == github.repository) ||
+      github.event_name == 'workflow_dispatch'
+    name: Diagnose and safely repair failed CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPAIR_CONFIG: .github/ci-repair-agent.json
+    steps:
+      - name: Check out the trusted default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Fetch failed run metadata and logs
+        id: failed_run
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id="${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.run_id }}"
+          [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "run_id must be numeric" >&2; exit 1; }
+          mkdir -p .ci-repair
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > .ci-repair/run.json
+          for attempt in 1 2 3; do
+            if gh run view "$run_id" --repo "${GITHUB_REPOSITORY}" --log-failed > .ci-repair/failed.log; then
+              break
+            fi
+            if [[ "$attempt" == "3" ]]; then
+              echo "Unable to retrieve failed workflow logs." >&2
+              exit 1
+            fi
+            sleep "$((attempt * 3))"
+          done
+          test -s .ci-repair/failed.log
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Diagnose against reviewed recipes
+        id: diagnose
+        run: |
+          node scripts/ci-repair-agent.mjs diagnose \
+            --config "$REPAIR_CONFIG" \
+            --run .ci-repair/run.json \
+            --log .ci-repair/failed.log \
+            --report .ci-repair/report.md \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Set up Node for a lockfile repair
+        if: steps.diagnose.outputs.recipe_id == 'pnpm-lockfile-out-of-date'
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Set up Terraform for formatting repair
+        if: steps.diagnose.outputs.recipe_id == 'terraform-format'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+          terraform_wrapper: false
+
+      - name: Apply bounded repair recipe
+        if: steps.diagnose.outputs.should_repair == 'true'
+        run: node scripts/ci-repair-agent.mjs repair --config "$REPAIR_CONFIG" --recipe "${{ steps.diagnose.outputs.recipe_id }}"
+
+      - name: Enforce changed-file and diff-size boundaries
+        id: diff
+        if: steps.diagnose.outputs.should_repair == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node scripts/ci-repair-agent.mjs verify-diff --config "$REPAIR_CONFIG" --recipe "${{ steps.diagnose.outputs.recipe_id }}"
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+
+      - name: Validate the proposed repair locally
+        if: steps.diagnose.outputs.should_repair == 'true' && steps.diff.outputs.has_changes == 'true'
+        run: node scripts/ci-repair-agent.mjs validate --config "$REPAIR_CONFIG" --recipe "${{ steps.diagnose.outputs.recipe_id }}"
+
+      - name: Create a draft repair pull request
+        id: pull_request
+        if: steps.diagnose.outputs.should_repair == 'true' && steps.diff.outputs.has_changes == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id="${{ steps.failed_run.outputs.run_id }}"
+          recipe_id="${{ steps.diagnose.outputs.recipe_id }}"
+          branch="automation/ci-repair/${run_id}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "A repair branch already exists for this run; refusing to overwrite it." >&2
+            exit 1
+          fi
+          git switch --create "$branch"
+          git config user.name "robur-ci-repair[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(ci): repair ${recipe_id}"
+          git push origin "$branch"
+          pr_url="$(gh pr create \
+            --repo "${GITHUB_REPOSITORY}" \
+            --base "${{ github.event.repository.default_branch }}" \
+            --head "$branch" \
+            --title "fix(ci): repair ${recipe_id}" \
+            --body-file .ci-repair/report.md \
+            --draft)"
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch remote validation on the repair branch
+        if: steps.pull_request.outputs.branch != ''
+        run: gh workflow run "${{ steps.diagnose.outputs.validation_workflow }}" --repo "${GITHUB_REPOSITORY}" --ref "${{ steps.pull_request.outputs.branch }}"
+
+      - name: Publish diagnosis summary
+        if: always() && hashFiles('.ci-repair/report.md') != ''
+        run: cat .ci-repair/report.md >> "$GITHUB_STEP_SUMMARY"

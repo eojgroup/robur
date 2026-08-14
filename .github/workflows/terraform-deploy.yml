@@ -1,10 +1,10 @@
-name: Terraform Infrastructure Deployment
+name: Future GKE / Cloud SQL deployment (disabled by default)
 
 on:
   workflow_dispatch:
     inputs:
       apply_production:
-        description: "Apply Terraform and configure production GKE resources"
+        description: "Apply the deferred GKE / Cloud SQL architecture after explicitly enabling it"
         required: true
         default: false
         type: boolean
@@ -20,7 +20,9 @@ concurrency:
 jobs:
   deploy:
     name: Terraform + Cloud SQL + GKE
-    if: inputs.apply_production == true
+    # The static web mock-up uses Firebase Hosting. Set the protected production variable
+    # ENABLE_FUTURE_BACKEND=true only after an intentional backend architecture review.
+    if: inputs.apply_production == true && vars.ENABLE_FUTURE_BACKEND == 'true'
     runs-on: ubuntu-latest
     environment: production
     env:

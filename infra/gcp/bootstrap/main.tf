@@ -17,6 +17,18 @@ resource "google_storage_bucket" "terraform_state" {
     enabled = true
   }
 
+  # Keep recent state history for recovery, but do not retain old versions indefinitely.
+  lifecycle_rule {
+    action {
+      type = "Delete"
+    }
+
+    condition {
+      days_since_noncurrent_time = 90
+      with_state                 = "ARCHIVED"
+    }
+  }
+
   labels = {
     app     = "robur"
     purpose = "terraform-state"

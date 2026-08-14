@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "repository": "eojgroup/robur",
+  "baseBranch": "main",
+  "monitoredWorkflows": [
+    "Robur CI",
+    "Build Apple clients"
+  ],
+  "limits": {
+    "maxLogBytes": 262144,
+    "maxChangedFiles": 5,
+    "maxChangedLines": 300
+  },
+  "recipes": [
+    {
+      "id": "pnpm-lockfile-out-of-date",
+      "matchAll": [
+        "ERR_PNPM_OUTDATED_LOCKFILE"
+      ],
+      "diagnosis": "The lockfile is out of sync with the committed workspace manifests.",
+      "repair": [
+        "corepack enable",
+        "pnpm install --lockfile-only"
+      ],
+      "validate": [
+        "pnpm install --frozen-lockfile",
+        "pnpm typecheck",
+        "pnpm test",
+        "pnpm build"
+      ],
+      "allowPaths": [
+        "pnpm-lock.yaml"
+      ],
+      "validationWorkflow": "Robur CI"
+    },
+    {
+      "id": "terraform-format",
+      "matchAll": [
+        "terraform fmt -check"
+      ],
+      "diagnosis": "Terraform formatting differs from the repository's canonical formatter output.",
+      "repair": [
+        "terraform -chdir=infra/gcp/bootstrap fmt -recursive",
+        "terraform -chdir=infra/gcp/terraform fmt -recursive",
+        "terraform -chdir=infra/gcp/hosting fmt -recursive"
+      ],
+      "validate": [
+        "terraform -chdir=infra/gcp/bootstrap fmt -check -recursive",
+        "terraform -chdir=infra/gcp/terraform fmt -check -recursive",
+        "terraform -chdir=infra/gcp/hosting fmt -check -recursive"
+      ],
+      "allowPaths": [
+        "infra/gcp/**/*.tf"
+      ],
+      "validationWorkflow": "Robur CI"
+    }
+  ]
+}

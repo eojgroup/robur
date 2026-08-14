@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -73,56 +74,28 @@ jobs:
         working-directory: infra/gcp/terraform
         run: terraform validate
 
+      - name: Init static hosting infrastructure without backend
+        working-directory: infra/gcp/hosting
+        run: terraform init -backend=false
+
+      - name: Format check static hosting infrastructure
+        working-directory: infra/gcp/hosting
+        run: terraform fmt -check -recursive
+
+      - name: Validate static hosting infrastructure
+        working-directory: infra/gcp/hosting
+        run: terraform validate
+
   k8s:
-    name: Kubernetes manifests
+    name: Infrastructure static checks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Check shell scripts
-        run: bash -n infra/scripts/add-secret-version.sh infra/scripts/bootstrap-gcp.sh infra/scripts/configure-github-production.sh infra/scripts/terraform-init-retry.sh infra/scripts/wait-for-k8s-job.sh
+        run: bash -n infra/scripts/add-secret-version.sh infra/scripts/bootstrap-gcp.sh infra/scripts/configure-github-production.sh infra/scripts/configure-github-hosting.sh infra/scripts/terraform-init-retry.sh infra/scripts/wait-for-k8s-job.sh
 
       - name: Check placeholders stay explicit
         run: |
           test "$(grep -RIl 'PROJECT_ID' infra/k8s | wc -l)" -ge 1
-
-  apple:
-    name: Apple project compile
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
-
-      - name: Generate Xcode project
-        working-directory: apps/mobile/ios
-        run: ruby generate_xcodeproj.rb
-
-      - name: Validate generated project contracts
-        working-directory: apps/mobile/ios
-        run: ruby validate_xcodeproj.rb
-
-      - name: Compile universal iOS and iPadOS application
-        working-directory: apps/mobile/ios
-        run: |
-          xcodebuild \
-            -project Robur.xcodeproj \
-            -scheme Robur \
-            -configuration Debug \
-            -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO \
-            build
-
-      - name: Compile watchOS application
-        working-directory: apps/mobile/ios
-        run: |
-          xcodebuild \
-            -project Robur.xcodeproj \
-            -target 'RoburWatch Watch App' \
-            -configuration Debug \
-            -sdk watchsimulator \
-            CODE_SIGNING_ALLOWED=NO \
-            build

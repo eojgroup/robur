@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: "dist",
-    sourcemap: true
+    // Hosting only serves the public mock-up; source maps add bytes without helping users.
+    sourcemap: false
   }
 });

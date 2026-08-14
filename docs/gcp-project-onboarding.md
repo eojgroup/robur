@@ -1,177 +1,183 @@
-# Robur Google Cloud project onboarding
+# Robur static web hosting onboarding
 
-This guide sets up one isolated production Google Cloud project for Robur. It
-keeps infrastructure in Terraform, uses keyless federation for GitHub Actions
-and GKE workloads, and keeps runtime HealthKit-ingest material in Secret
-Manager. Do not create a Google service-account JSON key.
+Robur’s first public web deployment is deliberately static. The dashboard is a
+React build containing mock Apple Health data; it makes no browser API calls and
+does not need a database, container registry, Cloud Run, GKE, Cloud SQL, load
+balancer, Google OAuth client, Firebase web config, or service-account key.
 
-## What an administrator must decide or authorize
+The production footprint is Firebase Hosting on the existing GCP project:
 
-These are account-level actions that code cannot safely decide:
+```text
+Project: robur-505508
+Region for project operations: europe-west2
+Firebase Hosting site: robur-505508
+Temporary public URL: https://robur-505508.web.app
+Custom domain: robur.fit
+```
 
-1. Select the Google Cloud organization/folder, a globally unique project ID,
-   and a billing account. Create or designate a small administrator group rather
-   than using a personal account as the only project owner.
-2. Confirm the production region (`europe-west2` is the current default), the
-   public domain, and the GitHub repository and deployment branch.
-3. Approve GKE and Cloud SQL spend, quotas, and organization policies. This
-   project creates GKE, a Cloud SQL Enterprise instance, Artifact Registry,
-   Cloud Storage, Pub/Sub, Secret Manager, and their networking components.
-4. Configure GitHub's `production` environment with the required reviewers and
-   deployment-branch protection appropriate to the organization. The setup
-   script creates the environment and variables but deliberately cannot choose
-   reviewers on your behalf.
-5. Create the public DNS record after the GKE ingress has an IP address. DNS can
-   be managed in another project or registrar; its ownership is a business
-   decision, so it is not declared in this repository.
+Firebase Hosting provides the CDN and TLS certificate. Its default `web.app`
+URL is usable before DNS is complete. The deferred GKE/Cloud SQL workflows are
+hard-gated by the protected `ENABLE_FUTURE_BACKEND` environment variable and
+must remain unset for this static-only milestone.
 
-## One-time bootstrap
+## Cost boundary
 
-Install the Google Cloud CLI, Terraform 1.8 or newer, and GitHub CLI. Authenticate
-with the administrator account that can create/link projects and manage IAM:
+The Terraform root at `infra/gcp/hosting` creates only:
+
+- Firebase added to this project and one Hosting site;
+- a GitHub OIDC workload-identity pool/provider and a narrow Hosting deployer
+  service account; and
+- optionally, a project-scoped billing-budget alert.
+
+It does **not** create a VM, GKE cluster, Cloud SQL instance, container image,
+load balancer, NAT gateway, or background worker. The Terraform state bucket
+retains current history but deletes archived versions after 90 days. Production
+web builds do not publish source maps and no longer ship the former 2 MB photo.
+
+A budget is an alert, not a hard cap. Firebase/Google charges and budget alerts
+can lag, so keep the expensive future-backend guardrail in place even when an
+alert exists.
+
+## What must be done manually
+
+These choices affect external accounts or ownership and should not be guessed
+by automation:
+
+1. Confirm the correct billing-account owner can receive budget alerts. The
+   project is already linked to an active billing account, but project Owner
+   alone may not grant Billing Account Costs Manager/Budget Manager permission.
+2. Add any required reviewers to GitHub’s `production` environment. The setup
+   script can safely enforce `main` as the deployment branch, but it cannot
+   choose people who should approve production deployments.
+3. At the DNS registrar for `robur.fit`, add the exact records emitted by
+   Firebase after Terraform creates the custom-domain request. Do not substitute
+   guessed A/TXT records: Firebase can require both ownership verification and
+   serving records, and they may change.
+
+No Google or Firebase secret belongs in GitHub for this deployment. GitHub
+Actions exchanges its short-lived OIDC token for the restricted service account.
+Do not create a JSON key, set `FIREBASE_TOKEN`, or put the supplied OAuth
+authorization codes in a repository secret.
+
+## One-time infrastructure apply
+
+Install Google Cloud CLI, Terraform 1.8+, and GitHub CLI. Authenticate with a
+project administrator; Application Default Credentials are required by the
+Google Terraform provider:
 
 ```bash
 gcloud auth login
 gcloud auth application-default login
-```
-
-Find the billing account ID (this is read-only):
-
-```bash
-gcloud billing accounts list --filter='open=true'
-```
-
-The bootstrap script can create the project, attach billing, create a globally
-unique versioned state bucket, and initialize the main Terraform backend. It
-does not create any service-account key.
-
-```bash
-./infra/scripts/bootstrap-gcp.sh \
-  --project-id robur-prod-123456 \
-  --billing-account 000000-000000-000000 \
-  --create-project
-```
-
-For an existing, already billed project, omit `--create-project`; the script
-will link the supplied billing account. Pass `--organization ORGANIZATION_ID`
-when a newly created project must live in a specific organization, or
-`--folder FOLDER_ID` when it belongs in a folder.
-
-The state bucket defaults to `robur-tf-state-<project-id>`. This is intentional:
-Cloud Storage bucket names are globally scoped, so the old fixed bucket name
-would collide with another project. Bootstrap state stays local and ignored by
-Git; Robur's actual infrastructure state is in the new versioned bucket.
-
-## Apply the Robur infrastructure
-
-Copy the example values, set the project/repository/domain fields, and keep the
-resulting file uncommitted:
-
-```bash
-cp infra/gcp/terraform/terraform.tfvars.example infra/gcp/terraform/terraform.tfvars
-terraform -chdir=infra/gcp/terraform plan
-terraform -chdir=infra/gcp/terraform apply
-```
-
-Terraform enables the required APIs and creates:
-
-- an isolated VPC/subnetwork, Artifact Registry, Pub/Sub, Cloud SQL PostgreSQL,
-  private-service networking, and GKE with the Secret Manager add-on;
-- a GitHub Actions OIDC workload-identity pool and deployer service account;
-- dedicated GKE node, API, and migration identities;
-- the Cloud SQL and Pub/Sub permissions required by the API and migrations; and
-- the `robur-healthkit-ingest-token` Secret Manager container (not its value).
-
-The first apply must use your trusted administrator credentials because the
-GitHub OIDC identity does not exist yet. After it succeeds, GitHub Actions uses
-OIDC instead of a downloaded key. The provider trust restricts tokens to the
-configured GitHub organization, repository, and deployment branch.
-
-## Configure GitHub Actions (automated)
-
-Authenticate the GitHub CLI as a repository administrator, then write the
-non-secret production variables from Terraform outputs:
-
-```bash
 gh auth login
-./infra/scripts/configure-github-production.sh \
-  --project-id robur-prod-123456 \
-  --state-bucket robur-tf-state-robur-prod-123456 \
-  --domain robur.fit \
+```
+
+The state bucket already exists. Create the ignored local variables file from
+the example and keep the billing budget blank on the first Hosting apply if
+you have not verified billing-account IAM:
+
+```bash
+cp infra/gcp/hosting/terraform.tfvars.example infra/gcp/hosting/terraform.tfvars
+```
+
+Set the file to these non-secret values:
+
+```hcl
+project_id        = "robur-505508"
+region            = "europe-west2"
+hosting_site_id   = "robur-505508"
+domain_name       = "robur.fit"
+github_repository = "eojgroup/robur"
+github_branch     = "main"
+
+# Leave blank if Billing Budget IAM has not been granted yet.
+billing_account_id = ""
+```
+
+Then apply the small Hosting root, using the existing state bucket:
+
+```bash
+export TF_STATE_BUCKET="robur-tf-state-robur-505508"
+./infra/scripts/terraform-init-retry.sh infra/gcp/hosting
+terraform -chdir=infra/gcp/hosting plan
+terraform -chdir=infra/gcp/hosting apply
+```
+
+Adding Firebase to a GCP project is irreversible. Terraform uses
+`prevent_destroy` for the Firebase association and `ABANDON` deletion policies
+for Hosting resources rather than trying to remove them on a future destroy.
+
+If Billing Budget IAM is available, set the actual billing-account ID and apply
+again. The default alert threshold is 100 SEK/month, with alerts at 50%, 80%,
+100%, and forecasted 100%:
+
+```hcl
+billing_account_id   = "<billing-account-id-with-budget-access>"
+budget_currency      = "SEK"
+monthly_budget_units = 100
+```
+
+## Configure GitHub deployment without secrets
+
+After the Hosting apply, run the repository helper. It reads Terraform outputs,
+creates/updates the `production` environment, restricts deployments to `main`,
+and writes only non-secret environment variables.
+
+```bash
+./infra/scripts/configure-github-hosting.sh \
+  --project-id robur-505508 \
+  --state-bucket robur-tf-state-robur-505508 \
   --repository eojgroup/robur
 ```
 
-The script creates/updates these GitHub `production` environment variables:
+It sets:
 
-| Variable | Value source |
+| Variable | Purpose |
 | --- | --- |
-| `GCP_PROJECT_ID` | project ID |
-| `GCP_REGION`, `GCP_ZONE` | chosen deployment location |
-| `GCP_TF_STATE_BUCKET` | bootstrap output/default name |
-| `GCP_WORKLOAD_IDENTITY_PROVIDER` | Terraform output |
-| `GCP_TERRAFORM_SERVICE_ACCOUNT` | Terraform output |
-| `GKE_CLUSTER` | Terraform output |
-| `WEB_DOMAIN_NAME` | chosen public domain |
+| `GCP_PROJECT_ID` | Hosting project ID |
+| `GCP_REGION`, `GCP_TF_STATE_BUCKET` | Terraform/project context |
+| `GCP_HOSTING_WORKLOAD_IDENTITY_PROVIDER` | GitHub OIDC provider path |
+| `GCP_HOSTING_DEPLOY_SERVICE_ACCOUNT` | Narrow Hosting deployer identity |
+| `FIREBASE_HOSTING_SITE`, `FIREBASE_HOSTING_URL` | Hosting deployment and health-check target |
+| `WEB_DOMAIN_NAME` | Intended custom domain |
 
-Then manually set the `production` environment's required reviewers and limit
-deployments to `main`. Do this before enabling or dispatching production
-workflows.
+The workflow has no cloud credential in GitHub secrets. Its service account has
+only `roles/firebasehosting.admin`, the Firebase CLI’s read-only
+`roles/serviceusage.apiKeysViewer`, and
+`roles/serviceusage.serviceUsageConsumer`; it cannot administer the project or
+provision the deferred backend.
 
-## Runtime secret: HealthKit ingest token
+## First public release and DNS
 
-Create one opaque 48-byte token without placing it on a command line or in a
-Terraform variable/state file:
-
-```bash
-openssl rand -base64 48 | ./infra/scripts/add-secret-version.sh \
-  robur-prod-123456 robur-healthkit-ingest-token
-```
-
-GKE mounts this Secret Manager value into only the API pod. The API workload
-identity has `roles/secretmanager.secretAccessor` on this one secret. It is not
-a GitHub secret and must never be put in an iOS or watchOS build: a static token
-inside a client application can be extracted.
-
-The current Apple client reads HealthKit only on device and does not upload
-HealthKit data yet. Before enabling the real `/api/healthkit/sync` flow for
-users, replace this temporary shared-token design with per-user authentication
-(for example, Sign in with Apple plus server-issued sessions/tokens), ownership
-checks, rate limiting, and audit logging. Apple HealthKit itself uses on-device
-user consent; it does not require a Google OAuth client ID, Google API key,
-Firebase configuration, or Google service-account credential.
-
-## DNS, deployment, and verification
-
-1. Manually dispatch `Terraform Infrastructure Deployment` from GitHub with
-   `apply_production` set to `true` once the production variables and protection
-   rules are ready.
-2. Manually dispatch `Build and Deploy to GKE` with `deploy_production` set to
-   `true`.
-3. Retrieve the ingress address:
+1. From `main`, manually run the **Deploy web mock-up** GitHub Actions workflow
+   and explicitly set `deploy_web` to true. It builds the web app from the
+   locked dependencies, uses OIDC, publishes Firebase Hosting, and checks the
+   default public URL for Robur’s HTML title.
+2. Open the default URL from Terraform output or the GitHub environment:
 
    ```bash
-   gcloud container clusters get-credentials robur-cluster \
-     --region europe-west2 --project robur-prod-123456
-   kubectl -n robur get ingress robur
+   terraform -chdir=infra/gcp/hosting output -raw default_url
    ```
 
-4. Create an `A`/`AAAA` record for `robur.fit` at the DNS provider. Wait for
-   `robur-web-cert` to become `Active`, then verify `/healthz` and `/readyz`.
+3. Get the registrar records produced by Firebase:
 
-The DNS record is the last expected manual infrastructure action. All Robur
-GCP resources, APIs, identities, and runtime wiring are declared in code.
+   ```bash
+   terraform -chdir=infra/gcp/hosting output -json custom_domain_dns_updates
+   terraform -chdir=infra/gcp/hosting output -raw custom_domain_ownership_state
+   terraform -chdir=infra/gcp/hosting output -raw custom_domain_host_state
+   ```
 
-## Secret inventory
+4. Create those exact records at the `robur.fit` registrar. Wait for DNS
+   propagation and for the Terraform state values to advance to verified/active.
+   Firebase provisions TLS automatically; do not create a separate load
+   balancer or certificate.
+5. Open `https://robur.fit` and confirm the dashboard loads over HTTPS.
 
-The Google deployment itself needs no GitHub secret or service-account JSON key.
-The one Robur runtime secret is the Secret Manager value above. The following
-Apple delivery credentials are separate from Google Cloud and remain GitHub
-`production` secrets because the existing TestFlight workflow consumes them:
+## Future backend boundary
 
-- `MATCH_PASSWORD`
-- `APP_STORE_CONNECT_API_KEY_ID`
-- `APP_STORE_CONNECT_API_ISSUER_ID`
-- `APP_STORE_CONNECT_API_KEY` (base64-encoded `.p8` file)
-
-Do not add an APNs key until server-side push delivery is implemented. The
-current iOS MVP neither registers device tokens nor sends APNs pushes.
+The existing GKE/Cloud SQL Terraform and workflows are kept for a separately
+reviewed product phase. They are intentionally unavailable unless an
+administrator adds `ENABLE_FUTURE_BACKEND=true` to the protected `production`
+environment *and* manually supplies the existing boolean workflow input. That
+second architecture review must cover user authentication, HealthKit data
+minimization, retention/deletion, API rate limiting, database backups, and a
+revised cost budget before any backend resource is created.

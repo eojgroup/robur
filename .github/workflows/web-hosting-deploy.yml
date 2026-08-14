@@ -1,0 +1,65 @@
+name: Deploy web mock-up
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_web:
+        description: "Publish the validated static web mock-up to Firebase Hosting"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: robur-static-web-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: inputs.deploy_web == true && github.ref == 'refs/heads/main'
+    name: Build and publish static web
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_HOSTING_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_HOSTING_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_HOSTING_DEPLOY_SERVICE_ACCOUNT: ${{ vars.GCP_HOSTING_DEPLOY_SERVICE_ACCOUNT }}
+      FIREBASE_HOSTING_SITE: ${{ vars.FIREBASE_HOSTING_SITE }}
+      FIREBASE_HOSTING_URL: ${{ vars.FIREBASE_HOSTING_URL }}
+    steps:
+      - name: Checkout trusted main revision
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the static web application
+        run: pnpm --filter @robur/web build
+
+      - name: Authenticate to Google Cloud without a key
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_HOSTING_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_HOSTING_DEPLOY_SERVICE_ACCOUNT }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Publish Firebase Hosting release
+        run: npx --yes firebase-tools@15.27.0 deploy --only hosting --project "${GCP_PROJECT_ID}" --non-interactive
+
+      - name: Verify the public release
+        run: |
+          test -n "${FIREBASE_HOSTING_URL}"
+          curl --fail --location --retry 4 --retry-delay 3 "${FIREBASE_HOSTING_URL}" -o delivered.html
+          grep -q '<title>Robur</title>' delivered.html

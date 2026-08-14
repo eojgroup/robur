@@ -1,114 +1,89 @@
-# Robur Technical Structure
+# Robur technical structure
 
-Robur now follows the Claritas GCP pattern inspected through the private GitHub connector.
-
-## Claritas Patterns Applied
-
-Claritas uses:
-
-- `apps/web` for React + Vite.
-- `apps/mobile` for native SwiftUI iPhone, iPadOS, and watchOS clients.
-- `apps/api` for the Node.js API.
-- `infra/gcp/terraform` for Google Cloud infrastructure.
-- `infra/k8s` for GKE manifests.
-- `infra/scripts` for deployment helpers.
-- GKE, Artifact Registry, Cloud SQL PostgreSQL, Pub/Sub, Secret Manager, Workload Identity, and GitHub Actions OIDC.
-
-Robur mirrors that shape with fitness-domain resources and naming.
+Robur is a monorepo for a native Apple HealthKit experience and a web dashboard.
+The present release boundary is intentionally small: HealthKit remains on the
+device and the web app is a static, deployable product mock-up using shared demo
+domain data.
 
 ## Applications
 
 ### Web
 
-`apps/web` is a Vite + React dashboard. The current screen implements the supplied Today mock-up:
+`apps/web` is Vite + React. It is now an operational dashboard rather than a
+landing card: a responsive navigation shell, readiness, Health signals,
+recommendation, weekly plan, and recovery trend use semantic tokens and
+accessible controls. The styling takes the operational hierarchy, tokenized
+surfaces, data typography, focus handling, reduced-motion behavior, and mobile
+safe-area care of Claritas as principles without reusing its product content,
+branding, or assets.
 
-- Recovery and training load scores.
-- Sleep, resting heart rate, and HRV.
-- Today's recommendation.
-- Weekly running, cycling, strength, and training totals.
-
-The web app is containerized with `apps/web/Dockerfile` and served by Nginx with `/healthz` and `/readyz` probes.
+The web build imports no runtime API and can be safely published as static
+content. It is served by Firebase Hosting for the current feature-evaluation
+phase. The retained Nginx Dockerfile is for a future separately-reviewed backend
+architecture; it is not deployed today.
 
 ### API
 
-`apps/api` is a Node.js/Express API shell for fitness data and HealthKit sync.
+`apps/api` remains a Node/Express API shell with health, readiness, future
+HealthKit-sync, and push-registration endpoints. It is not deployed in the
+static web phase, and no web client talks to it. A production API requires a
+separate authentication, consent, retention, abuse-prevention, and cost review.
 
-Endpoints:
+### Apple clients
 
-- `GET /healthz`
-- `GET /readyz`
-- `GET /api/fitness/today`
-- `POST /api/healthkit/sync`
-- `POST /api/push/register`
+`apps/mobile/ios` contains the SwiftUI iPhone/iPad app
+(`com.eojgroup.robur`) and embedded watchOS app
+(`com.eojgroup.robur.watchkitapp`). The iPhone/iPad client requests HealthKit
+read access and maps workouts, sleep, resting heart rate, HRV, and training
+totals on device. The watch UI is a local glance surface; it should not be
+described as a synced HealthKit client until a separate data/sync implementation
+exists.
 
-The API accepts an optional `x-healthkit-token` header when its server-only
-HealthKit ingest token is configured. In GKE the token is mounted from Google
-Secret Manager; no static token is shipped to an Apple client. Server-side
-HealthKit access is not possible; Apple Health data must be read on-device and
-synced by the iOS app with user permission.
+## Shared domain model
 
-### Apple
+`packages/core` is the TypeScript source of truth for the static snapshot,
+starter plan, week summaries, formatters, and future payload normalization. The
+native client has a corresponding Swift model under
+`apps/mobile/ios/Sources/RoburShared`.
 
-`apps/mobile/ios` contains the SwiftUI app for:
+## Current hosting architecture
 
-- Universal iPhone/iPad target: `com.eojgroup.robur`
-- Embedded watchOS app: `com.eojgroup.robur.watchkitapp`
+```text
+GitHub Actions (manual main-only deploy)
+  -> GitHub OIDC short-lived token
+  -> narrow Firebase Hosting deployer service account
+  -> Firebase Hosting CDN + TLS
+  -> robur-505508.web.app, then robur.fit after DNS verification
+```
 
-The current native MVP includes:
+`infra/gcp/hosting` declares the Firebase project association, Hosting site,
+optional custom-domain request, OIDC identity, narrow IAM grants, and optional
+budget alert. No credential key is stored. `firebase.json` supplies cache and
+basic security headers for the static release.
 
-- HealthKit entitlement on both targets.
-- HealthKit authorization and on-device query flow for workouts, sleep, resting
-  heart rate, HRV, and training totals.
-- Explicit empty states when a user has no available data or has not granted
-  read access.
-- iPhone/iPad Today screen and watchOS Today/recommendation glance backed by
-  real device data.
+The state bucket is provisioned by `infra/gcp/bootstrap`; it keeps versioning
+for recovery while removing archived state versions after 90 days.
 
-## Shared Code
+## Deferred backend architecture
 
-`packages/core` contains the TypeScript source of truth for:
-
-- Today fitness snapshot.
-- Week totals.
-- Recommendation label formatting.
-- HealthKit sync payload normalization.
-- Starter training-plan calculations.
-
-The Apple app mirrors the initial model in Swift under `apps/mobile/ios/Sources/RoburShared`.
-
-## Infrastructure
-
-`infra/gcp/terraform` provisions the GCP baseline:
-
-- Required Google APIs.
-- GCS Terraform state bucket, created by the separate bootstrap root because a
-  backend must exist before the main Terraform state can be initialized.
-- Artifact Registry repository: `robur-app`.
-- GKE cluster: `robur-cluster`.
-- Cloud SQL PostgreSQL instance: `robur-sql`.
-- Postgres database/user for Robur.
-- Pub/Sub topic: `robur-fitness-events`.
-- Secret Manager secret for the server-only HealthKit ingest token, mounted into
-  the API with the GKE Secret Manager add-on.
-- Dedicated node, API, and migration workload identities with only the required
-  Cloud SQL, Pub/Sub, image-pull, logging, monitoring, and secret-access roles.
-- GitHub Actions Workload Identity Pool/provider and deploy service account.
-
-`infra/gcp/sql` contains SQL migrations for HealthKit sync events and daily fitness snapshots.
-
-`infra/k8s` contains:
-
-- Namespace and service accounts.
-- Robur config map.
-- API and web deployments/services.
-- Flyway migration job.
-- GKE managed certificate and ingress.
+`infra/gcp/terraform`, `infra/k8s`, and the GKE/Cloud SQL workflows remain in
+the repository as a future architecture, but are intentionally disabled unless
+the protected `production` variable `ENABLE_FUTURE_BACKEND` is explicitly set
+to `true`. Those workflows also require a manual boolean input. This makes it
+impossible for normal web/UI work to create cluster, database, container, or
+load-balancer cost.
 
 ## CI/CD
 
-Workflows:
-
-- `Robur CI`: Node typecheck/test/build, Terraform validation, Kubernetes script checks, and unsigned Apple compile on macOS.
-- `Terraform Infrastructure Deployment`: manually gated; applies GCP Terraform and upserts cluster config/secrets only when `apply_production` is enabled.
-- `Build and Deploy to GKE`: manually gated; builds API/web containers, pushes to Artifact Registry, runs migrations, and deploys manifests only when `deploy_production` is enabled.
-- `Build Apple clients`: compiles iPhone, iPad, Watch, then uploads to TestFlight only when manually dispatched with its distribution input enabled.
+- **Robur CI** runs Node validation and all Terraform roots on Linux. Apple
+  compilation lives only in the targeted Apple workflow, avoiding duplicate
+  macOS runner cost.
+- **Build Apple clients** compiles iPhone, iPad, and Watch when Apple sources
+  change; TestFlight remains explicitly gated.
+- **Deploy web mock-up** is a manual `main`-only Firebase Hosting release using
+  OIDC. It has no GCP secret.
+- **Future GKE / Cloud SQL deployment** and **Future GKE application
+  deployment** are hard-disabled until a deliberate backend approval.
+- **CI Repair Agent** observes selected failed trusted-main runs, uses reviewed
+  deterministic recipes, validates a bounded diff, then creates a draft PR.
+  See [CI Repair Agent](ci-repair-agent.md).

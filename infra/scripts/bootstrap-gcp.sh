@@ -7,7 +7,7 @@ usage() {
 Usage: bootstrap-gcp.sh --project-id PROJECT_ID --billing-account BILLING_ACCOUNT [options]
 
 Creates the Google Cloud project when requested, links billing, creates the
-versioned Terraform state bucket, and initializes the main Terraform backend.
+versioned Terraform state bucket, and initializes the static Hosting Terraform backend.
 
 Options:
   --project-id ID          Required Google Cloud project ID.
@@ -132,7 +132,7 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 infra_dir="$(cd "$script_dir/.." && pwd)"
 bootstrap_dir="$infra_dir/gcp/bootstrap"
-terraform_dir="$infra_dir/gcp/terraform"
+terraform_dir="$infra_dir/gcp/hosting"
 
 terraform -chdir="$bootstrap_dir" init -input=false
 terraform -chdir="$bootstrap_dir" apply -input=false -auto-approve \
@@ -150,4 +150,7 @@ State bucket: $state_bucket
 Next: create $terraform_dir/terraform.tfvars from its example, then run:
   terraform -chdir="$terraform_dir" plan
   terraform -chdir="$terraform_dir" apply
+
+The static Hosting root is the current production path. The GKE / Cloud SQL root
+remains deferred and cannot deploy unless its separate production guardrail is enabled.
 EOF

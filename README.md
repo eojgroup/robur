@@ -1,20 +1,26 @@
 # Robur
 
-Robur is a fitness application scaffold prepared for web, API, iOS, iPadOS, and watchOS deployment.
+Robur is a fitness product scaffold with a native Apple HealthKit client and a
+responsive web dashboard. The current web release is intentionally static: it
+lets us evaluate the complete dashboard mock-up without creating an API,
+database, container, cluster, or load-balancer footprint.
 
-This repository is structured as a deployment-ready monorepo:
+## Repository layout
 
-- `apps/web`: Vite + React web app for the Robur fitness dashboard.
-- `apps/api`: Node.js/Express API shell for HealthKit sync, readiness metrics, and future ingestion jobs.
-- `apps/mobile`: Native SwiftUI app targeting iPhone, iPad, and Apple Watch.
-- `packages/core`: Shared Robur fitness domain models and calculations for app surfaces.
-- `infra/gcp`: Terraform, Cloud SQL migrations, and Google Cloud deployment infrastructure.
-- `infra/k8s`: Kubernetes manifests for GKE workloads.
-- `infra/scripts`: Deployment helpers.
-- `.github/workflows`: CI, GKE deploy, Terraform deploy, and Apple TestFlight deploy pipelines.
-- `docs`: Architecture and administrator setup runbooks.
+- `apps/web` — Vite + React Robur dashboard.
+- `apps/mobile` — SwiftUI iPhone, iPad, and Watch app with on-device HealthKit
+  reading.
+- `apps/api` — future Node/Express API shell; not deployed during static web
+  evaluation.
+- `packages/core` — shared fitness-domain models and demo snapshot.
+- `infra/gcp/hosting` — Firebase Hosting, keyless GitHub OIDC, and optional
+  budget-alert Terraform.
+- `infra/gcp/terraform`, `infra/k8s` — deferred GKE/Cloud SQL backend design,
+  hard-gated by a protected production variable.
+- `.github/workflows` — CI, Apple build, static Hosting deploy, deferred
+  backend workflows, and the CI Repair Agent.
 
-## Local Setup
+## Local validation
 
 ```bash
 pnpm install
@@ -23,23 +29,40 @@ pnpm test
 pnpm build
 ```
 
-Run the web app locally:
+Run the web dashboard locally:
 
 ```bash
 pnpm dev:web
 ```
 
-## Deployment Readiness
+## Static web launch
 
-The automated pieces are in place, but first deployment still requires administrator setup in Google Cloud, GitHub, Apple Developer, App Store Connect, and DNS.
+The production web target is Firebase Hosting in GCP project `robur-505508`.
+Deployment uses GitHub OIDC—there is no Firebase token, Google service-account
+key, or web runtime secret.
 
-Start with [the GCP project onboarding guide](docs/gcp-project-onboarding.md)
-and [the remaining administrator tasks](docs/admin-manual-tasks.md), then use:
+Follow [static web hosting onboarding](docs/gcp-project-onboarding.md) for the
+small Terraform apply, GitHub environment setup, budget-alert option, first
+manual release, and `robur.fit` DNS handoff. The only external manual work is
+choosing production reviewers/billing-alert recipients and adding the exact
+Firebase DNS records at the domain registrar.
 
-- `.github/workflows/terraform-deploy.yml` to apply Google Cloud infrastructure only when manually dispatched with `apply_production` enabled.
-- `.github/workflows/gke-deploy.yml` to build web/API containers, push them to Artifact Registry, and deploy to GKE only when manually dispatched with `deploy_production` enabled.
-- `.github/workflows/apple-build.yml` to compile iOS/iPadOS/watchOS and upload to TestFlight when signing is configured.
+The old GKE/Cloud SQL deployment workflows remain unavailable unless an
+administrator deliberately sets the protected `ENABLE_FUTURE_BACKEND=true`
+variable and manually confirms the workflow input. Do not enable that path for
+the static mock-up.
 
-## Claritas Baseline
+## Native app status
 
-Claritas is a private repository. The GitHub connector inspection showed it uses a GCP monorepo structure with `apps/web`, `apps/mobile`, `apps/api`, `infra/gcp`, `infra/k8s`, GKE, Cloud SQL PostgreSQL, Artifact Registry, Workload Identity, and GitHub Actions OIDC. Robur now follows that structure with fitness-domain naming.
+The iPhone/iPad app reads permitted HealthKit data on-device. Start real-device
+validation with [Apple HealthKit device validation](docs/apple-healthkit-device-test.md).
+The web dashboard currently uses demo data; it does not sync private HealthKit
+data to GCP.
+
+## CI Repair Agent
+
+The repository includes a secure, configuration-driven CI Repair Agent. It
+diagnoses selected failed `main` CI runs, makes only explicit deterministic
+repairs, validates the bounded diff, and opens a draft PR for human review.
+See [CI Repair Agent](docs/ci-repair-agent.md) for the trust model, recipe
+allowlist, and operating guide.
