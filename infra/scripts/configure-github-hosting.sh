@@ -107,7 +107,7 @@ gh api --method PUT "repos/$repository/environments/production" --input - >/dev/
 {"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
 JSON
 
-existing_policy_names="$(gh api "repos/$repository/environments/production/deployment-branch-policies" --paginate --jq '.[].name' || true)"
+existing_policy_names="$(gh api "repos/$repository/environments/production/deployment-branch-policies" --jq '.branch_policies[].name' || true)"
 while IFS= read -r policy_name; do
   [[ -z "$policy_name" ]] && continue
   if [[ "$policy_name" != "main" ]]; then
