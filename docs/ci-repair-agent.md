@@ -1,118 +1,114 @@
 # CI Repair Agent
 
-The CI Repair Agent is a repository-local, configuration-driven GitHub Actions
-automation. When a selected workflow fails on a trusted push to the configured
-base branch, it retrieves the failed log, diagnoses it against a small reviewed
-recipe set, applies at most one bounded mechanical repair, validates it locally,
-and opens a **draft** pull request. It never auto-merges.
+The CI Repair Agent is repository-local, configuration-driven GitHub Actions
+automation. It inspects a selected failed run, matches it only against reviewed
+mechanical recipes, applies at most one bounded change, validates it, and opens
+a **draft** pull request. It never auto-merges.
 
-It is intentionally not an autonomous shell or code-generation system. Unknown
-failures are reported without changing the repository. That conservative design
-is what makes it safe to leave enabled as the repository grows.
+It is integrated into `terraform-deploy.yml`; there is no standalone fourth
+repair workflow. This keeps the delivery surface to three workflow files:
+`apple-build.yml`, `gke-deploy.yml`, and `terraform-deploy.yml`.
 
 ## Trigger and trust boundary
 
-`.github/workflows/ci-repair-agent.yml` listens for completed failures from the
-workflow names listed in both that workflow and
-`.github/ci-repair-agent.json`.
+The repair job is isolated from the Terraform deploy job. For a
+`repository_dispatch` event, the Terraform apply job does not run; only the
+repair job is eligible.
 
-Before repair, it requires all of the following:
+- A failed trusted `main` push or manual run of **Build Apple clients**, **Build
+  and Deploy to GKE**, or **Terraform Infrastructure Deployment** sends a
+  `ci-repair` `repository_dispatch` with the failed run ID.
+- Before any recipe is selected, the Node agent fetches the referenced run and
+  independently requires: `completed`, `failure`, a `push` or
+  `workflow_dispatch` event, `main` as the head branch, repository
+  `eojgroup/robur`, and a workflow name in the committed allowlist.
 
-- completed run with a `failure` conclusion;
-- `push` event, not `pull_request`, `workflow_dispatch`, or a fork;
-- the configured base branch (`main`); and
-- the configured repository (`eojgroup/robur`).
-
-It checks out the current trusted default branch, not the failed revision. The
-repair configuration therefore cannot come from a failed feature branch or log.
-The workflow has write permissions because a repair branch and draft PR need to
-be created, but those permissions are unreachable for untrusted PR input.
-
-Manual dispatch accepts a run ID for re-investigation, but the Node agent applies
-the exact same trust checks before it can select a repair recipe.
+Consequently, a fork, pull request, arbitrary dispatch payload, feature branch,
+unknown workflow, or successful/incomplete run cannot select a repair. The job
+checks out the current trusted default branch, not the failed revision, so its
+configuration cannot be supplied by a failed feature branch or log.
 
 ## Safe operating sequence
 
 ```text
-selected failure on trusted main push
-  -> retrieve metadata + failed logs
-  -> redact + cap logs to 256 KiB
-  -> match one reviewed recipe, or stop
-  -> run only commands stored in default-branch configuration
-  -> enforce file/path/line diff limits
-  -> run recipe-local validation
-  -> push a new automation branch and open a draft PR
-  -> dispatch the repository CI workflow on that repair branch
+failed monitored run
+  -> trusted event delivers a run ID to terraform-deploy.yml's repair job
+  -> fetch run metadata and failed-step log
+  -> cap to 256 KiB and redact common secrets
+  -> match one default-branch recipe, or report no repair
+  -> execute only that recipe's committed commands
+  -> enforce path, file-count, line-count, and binary-diff limits
+  -> run its local validation
+  -> create a unique draft PR and dispatch validate-only GKE checks
 ```
 
 The agent never evaluates shell code, filenames, URLs, or instructions from
 workflow logs. Logs are redacted for common GitHub/Google tokens, bearer tokens,
-private keys, and secret-like assignments before matching/reporting. The pull
-request body contains the workflow/run metadata and diagnosis, not raw logs.
+private keys, and secret-like assignments before matching and reporting. The
+draft PR body contains metadata and the diagnosis, not raw failed logs.
 
-The workflow uses a unique branch per failed run and refuses to overwrite an
-existing one. This makes retries observable and avoids force-pushing a repair a
-human may already be reviewing.
+It refuses to overwrite the branch for an already processed failed run. Unknown
+failures are reported without a repository change.
 
-## Current recipes
+## Current recipe allowlist
 
-`.github/ci-repair-agent.json` contains the reviewed recipe allowlist:
+`.github/ci-repair-agent.json` is the source of truth. The current reviewed
+recipes are:
 
 | ID | Failure signature | Allowed change | Local validation |
 | --- | --- | --- | --- |
 | `pnpm-lockfile-out-of-date` | `ERR_PNPM_OUTDATED_LOCKFILE` | `pnpm-lock.yaml` only | locked install, typecheck, tests, build |
-| `terraform-format` | `terraform fmt -check` | `infra/gcp/**/*.tf` only | Terraform formatting checks |
+| `terraform-format` | `terraform fmt -check` | `infra/gcp/**/*.tf` only | Terraform formatting checks for bootstrap and production roots |
 
-Both recipes are deterministic and low-risk. The diff guard rejects more than
-five changed files, more than 300 changed lines, binary changes, and any path
-outside the selected recipe’s allowlist.
+The diff guard rejects more than five changed files, more than 300 changed
+lines, binary changes, and every path outside the selected recipe's allowlist.
+The repair route never runs Terraform plan/apply, changes cloud IAM, creates
+secrets, changes GitHub protection, retries billing, uploads artifacts, or
+merges a pull request.
 
 ## Adding a recipe safely
 
-Treat a new recipe as production automation code. A reviewer should verify that
-it is deterministic, reversible through a normal PR revert, and does not
-provision infrastructure, alter credentials, change dependencies broadly, or
-run untrusted input.
+Treat every recipe as production automation code.
 
-1. Add an exact, stable `matchAll` signature to
+1. Add a stable, exact `matchAll` signature to
    `.github/ci-repair-agent.json`.
-2. Limit `repair` commands to known repository commands from the trusted config.
-   Never interpolate data from logs, issue text, branch names, or workflow
-   event payloads.
-3. Give the recipe the smallest viable `allowPaths`, file count, and line count.
-4. Add focused tests to `scripts/ci-repair-agent.test.mjs` for matching and
-   rejected edge cases.
-5. Add a local `validate` sequence and set `validationWorkflow` to a workflow
-   with `workflow_dispatch` enabled.
-6. Review the generated draft PR process on a non-production failure before
-   relying on the recipe.
+2. Limit repair commands to deterministic repository commands in that committed
+   configuration. Never interpolate a log, issue, branch, URL, or event value
+   into a command.
+3. Use the smallest viable path allowlist and retain the global diff limits.
+4. Add focused tests to `scripts/ci-repair-agent.test.mjs`, including rejected
+   trust and diff cases.
+5. Supply a local validation command and a validate-only dispatchable workflow.
+6. Review a generated draft PR before relying on the recipe for routine use.
 
-Do not add a recipe for deployment failures that runs Terraform apply, modifies
-cloud IAM, creates secrets, changes GitHub protection, retries billing, or
-uploads artifacts. Those failures require human authorization.
+Do not add repair recipes for infrastructure deployment failures, credentials,
+IAM, secrets, billing, production configuration, or artifact publication.
+Those require explicit human authority.
 
 ## Operations and observability
 
-Each CI Repair Agent run appends a concise report to the Actions job summary.
-When it creates a PR, the same report forms the draft PR body and the workflow
-dispatches `Robur CI` against the repair branch. The human reviewer still owns
-the merge decision and can inspect the normal CI checks.
+Every repair job writes a concise report to its Actions summary. If it makes a
+change, the same report becomes the draft PR body and `gke-deploy.yml` is
+dispatched on that branch with deployment disabled. A human still owns review,
+normal CI approval, merge, and any subsequent production deployment.
 
-To inspect a run manually:
+Inspect the integrated workflow and the source failure with:
 
 ```bash
-gh run list --workflow ci-repair-agent.yml --repo eojgroup/robur
-gh run view <repair-run-id> --repo eojgroup/robur --log-failed
+gh run list --workflow terraform-deploy.yml --repo eojgroup/robur
+gh run view <repair-workflow-run-id> --repo eojgroup/robur --log-failed
+gh run view <failed-run-id> --repo eojgroup/robur --log-failed
 ```
 
-To ask it to inspect a known failed run, use the **CI Repair Agent** workflow’s
-manual dispatch and provide the numeric failed run ID. A manual request cannot
-bypass the source trust policy.
+A trusted administrator may use the repository's `ci-repair` dispatch route to
+re-investigate a numeric failed run ID, but that only queues observation. The
+agent repeats the same run-metadata trust checks and cannot use the request to
+bypass them.
 
 ## Cost and data handling
 
-The agent uses GitHub-hosted workflow minutes only when a monitored workflow
-fails. It has no LLM service, third-party webhook, database, cloud runtime, or
-new secret. Logs are fetched only for the selected failure, capped before use,
-and are not uploaded outside GitHub. This keeps the repair mechanism both
-repository-agnostic and inexpensive.
+The agent uses GitHub-hosted minutes only after a monitored failure. It has no
+LLM, third-party runtime, database, webhook, cloud resource, or new secret.
+It fetches only the selected failure log, caps it before use, and does not
+upload it outside GitHub. Integrating it into the Terraform workflow avoids a
+separate workflow while preserving a distinct repair-only execution path.

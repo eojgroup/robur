@@ -3,6 +3,8 @@ region      = "europe-west2"
 zone        = "europe-west2-b"
 environment = "prod"
 
+cloud_sql_tier = "db-custom-1-3840"
+
 github_repository = "eojgroup/robur"
 github_branch     = "main"
 k8s_namespace     = "robur"

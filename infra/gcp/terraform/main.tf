@@ -1,7 +1,3 @@
-data "google_project" "current" {
-  project_id = var.project_id
-}
-
 locals {
   app_name          = "robur"
   artifact_repo     = "robur-app"
@@ -131,6 +127,8 @@ resource "google_service_account" "github_deploy" {
   project      = var.project_id
   account_id   = local.github_sa_id
   display_name = "Robur GitHub OIDC deployer"
+
+  depends_on = [google_project_service.enabled_services["iam.googleapis.com"]]
 }
 
 resource "google_service_account_iam_binding" "github_deploy_workload_identity_user" {
@@ -143,7 +141,7 @@ resource "google_service_account_iam_binding" "github_deploy_workload_identity_u
 
 resource "google_project_iam_member" "github_deploy_roles" {
   for_each = toset([
-    "roles/artifactregistry.writer",
+    "roles/artifactregistry.admin",
     "roles/cloudsql.admin",
     "roles/compute.networkAdmin",
     "roles/container.admin",
@@ -190,9 +188,10 @@ resource "google_compute_subnetwork" "gke" {
 }
 
 resource "google_container_cluster" "primary" {
-  name     = local.cluster_name
-  project  = var.project_id
-  location = var.region
+  name           = local.cluster_name
+  project        = var.project_id
+  location       = var.region
+  node_locations = [var.zone]
 
   initial_node_count       = 1
   remove_default_node_pool = true
@@ -224,6 +223,8 @@ resource "google_service_account" "gke_nodes" {
   project      = var.project_id
   account_id   = local.gke_nodes_sa_id
   display_name = "Robur GKE node service account"
+
+  depends_on = [google_project_service.enabled_services["iam.googleapis.com"]]
 }
 
 resource "google_project_iam_member" "gke_node_roles" {
@@ -248,11 +249,12 @@ resource "google_artifact_registry_repository_iam_member" "gke_nodes_pull_images
 }
 
 resource "google_container_node_pool" "primary" {
-  name       = "robur-primary"
-  project    = var.project_id
-  location   = var.region
-  cluster    = google_container_cluster.primary.name
-  node_count = 1
+  name           = "robur-primary"
+  project        = var.project_id
+  location       = var.region
+  node_locations = [var.zone]
+  cluster        = google_container_cluster.primary.name
+  node_count     = 1
 
   node_config {
     machine_type    = "e2-small"
@@ -279,12 +281,16 @@ resource "google_service_account" "robur_api" {
   project      = var.project_id
   account_id   = local.api_sa_id
   display_name = "Robur API workload identity service account"
+
+  depends_on = [google_project_service.enabled_services["iam.googleapis.com"]]
 }
 
 resource "google_service_account" "robur_migrations" {
   project      = var.project_id
   account_id   = local.migrations_sa_id
   display_name = "Robur migrations workload identity service account"
+
+  depends_on = [google_project_service.enabled_services["iam.googleapis.com"]]
 }
 
 resource "google_project_iam_member" "robur_cloud_sql_clients" {

@@ -1,119 +1,174 @@
-# Robur administrator tasks
+# Robur administrator manual tasks
 
-Automation owns the repeatable infrastructure and deployment wiring. The
-following tasks intentionally remain manual because they select account owners,
-approval policy, DNS ownership, or third-party credentials.
+Automation owns repeatable infrastructure, deployment wiring, and CI checks.
+The following remain manual because they select external account owners,
+approval policy, DNS ownership, or Apple credentials. The full GCP command
+sequence is in [GCP project onboarding](gcp-project-onboarding.md).
 
-## Static web launch: required manual decisions
+## Before the first GCP apply
 
-1. Confirm a billing-account administrator who should receive budget alerts.
-   If the Terraform budget apply is denied, grant a suitable account-level
-   Billing Budget/Costs role, then set `billing_account_id` in the ignored
-   Hosting Terraform variables and reapply. A budget alerts; it cannot stop
-   charges by itself.
-2. Add the appropriate people as required reviewers to GitHub’s `production`
-   environment if the organization requires deployment approval. The helper
-   enforces `main` as the only deployment branch but intentionally does not
-   select reviewers.
-3. After the Hosting Terraform apply, add the exact Firebase-issued DNS records
-   shown by `terraform output -json custom_domain_dns_updates` at the registrar
-   for `robur.fit`. Do not guess the records or point the domain at GKE.
+1. A billing-account administrator must confirm billing for `robur-505508` and
+   approve the initial billable footprint: regional GKE, one preemptible node,
+   zonal always-on Cloud SQL, Artifact Registry, and an external load balancer
+   once Ingress is deployed.
+2. The same administrator should create a Cloud Billing budget and select alert
+   recipients. A budget is a notification mechanism, not a hard spending cap,
+   and it may lag actual usage.
+3. A repository administrator must select human reviewers for GitHub's
+   `production` environment and restrict deployments to `main`. Do not rely on
+   the setup script to choose approvers or branch policy.
+4. The DNS owner must approve a cutover of `robur.fit`. Its existing root DNS
+   may point at another live site, so replacing it is an external change rather
+   than a harmless additional record.
 
-The complete command sequence is in
-[static web hosting onboarding](gcp-project-onboarding.md).
+## GitHub production configuration
 
-### GitHub variables and secrets for static Hosting
+After the trusted keyless-identity bootstrap and before the first full
+workflow apply, run:
 
-Run `infra/scripts/configure-github-hosting.sh` after the Hosting Terraform
-apply. It creates the required `production` environment variables automatically.
-There are no static-Hosting GitHub secrets and no service-account JSON key:
-
-```text
-No FIREBASE_TOKEN
-No Google service-account key
-No Google OAuth client secret
-No Apple HealthKit secret
+```bash
+./infra/scripts/configure-github-production.sh \
+  --project-id robur-505508 \
+  --state-bucket robur-tf-state-robur-505508 \
+  --domain robur.fit \
+  --repository eojgroup/robur
 ```
 
-The deployment workflow uses GitHub OIDC and a narrow Google service account.
+The helper writes these non-secret `production` environment variables:
+
+| Variable | Required by |
+| --- | --- |
+| `GCP_PROJECT_ID` | Terraform and GKE deployment. |
+| `GCP_REGION`, `GCP_ZONE` | Terraform and GKE deployment. |
+| `GCP_TF_STATE_BUCKET` | Terraform deployment. |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | Keyless Google authentication. |
+| `GCP_TERRAFORM_SERVICE_ACCOUNT` | Terraform, image publishing, and GKE deployment. |
+| `GKE_CLUSTER` | GKE application deployment. |
+| `WEB_DOMAIN_NAME` | Ingress and managed certificate. |
+
+No Google service-account JSON key, Firebase token, Google OAuth client secret,
+or Firebase configuration belongs in GitHub. The workflows use GitHub OIDC.
+
+### Runtime secret
+
+Before the API is deployed, seed Secret Manager directly:
+
+```bash
+openssl rand -base64 48 | ./infra/scripts/add-secret-version.sh \
+  robur-505508 robur-healthkit-ingest-token
+```
+
+Alternatively, set the protected `production` GitHub secret
+`HEALTHKIT_INGEST_TOKEN`; the Terraform workflow reconciles it without logging
+the value. Robur currently uses this workflow-driven path. If the secret is
+later removed, the workflow keeps the already enabled Secret Manager version.
+Never place this value in an Apple client, browser build, source file, or
+command line.
+
+## DNS and legacy Firebase cleanup
+
+1. The unverified Firebase `robur.fit` mapping and dedicated deploy identity
+   have already been removed. The Firebase project association/default site
+   cannot be undone, but it is dormant and no repository workflow deploys to it.
+2. Run the first successful GKE deploy and obtain the Ingress IP from its
+   Actions summary or:
+
+   ```bash
+   kubectl -n robur get ingress robur
+   ```
+
+3. At the DNS registrar, replace—not supplement—the root `A` record for
+   `robur.fit` with that exact IP. Preserve unrelated MX, TXT, and subdomain
+   records. Do not add Firebase DNS records.
+4. Wait for DNS propagation and for `robur-web-cert` to report active, then
+   check `https://robur.fit`. If the Ingress is later recreated, repeat this
+   handoff with its newly allocated IP.
 
 ## Apple Developer and HealthKit
 
-For the current on-device HealthKit milestone, follow
-[Apple HealthKit device validation](apple-healthkit-device-test.md) before
-creating TestFlight credentials.
-
-The identifiers are already configured as:
+First complete [Apple HealthKit device validation](apple-healthkit-device-test.md)
+on a real iPhone and, when testing Watch data, a paired Apple Watch. The
+confirmed identifiers are:
 
 ```text
-iPhone/iPad: com.eojgroup.robur
-Watch app:   com.eojgroup.robur.watchkitapp
+Apple Developer Team ID: VTBJTFDTQY
+iPhone/iPad App ID:     com.eojgroup.robur
+Watch companion App ID: com.eojgroup.robur.watchkitapp
 ```
 
-Enable these capabilities in Apple Developer:
+In Apple Developer, create or confirm the two explicit App IDs and enable
+**HealthKit** for each. Use Xcode automatic signing for device testing and
+regenerate provisioning profiles after capability changes. Do not enable App
+Groups, Push Notifications, or HealthKit Background Delivery for the current
+local-read MVP.
+
+When the device test passes, confirm the existing App Store Connect iOS app:
 
 ```text
-HealthKit
-App Groups only if a future iPhone/watch shared-store design needs it
-Push Notifications only when server-side push delivery is implemented
-```
-
-Create the App Store Connect app manually:
-
-```text
-Name: Robur
-SKU: robur-ios
+Name: Robur Health
+Apple ID: 6801487531
 Primary bundle ID: com.eojgroup.robur
 Platform: iOS
 ```
 
-### Apple delivery secrets, only when TestFlight is enabled
+The watch app is embedded in that iOS product; do not create a second App Store
+Connect product for it.
 
-The TestFlight workflow is deliberately separate from static web launch. It
-needs these `production` GitHub secrets only once signing/distribution is ready:
+### TestFlight delivery, only when approved
 
-```text
-MATCH_PASSWORD
-APP_STORE_CONNECT_API_KEY_ID
-APP_STORE_CONNECT_API_ISSUER_ID
-APP_STORE_CONNECT_API_KEY  (base64-encoded .p8 contents)
-```
+TestFlight uses direct signing in GitHub Actions. It does not use Fastlane,
+Match, a certificate repository, an Apple ID password, or a downloaded
+provisioning-profile secret.
 
-It also needs these environment variables:
+Before manually dispatching **Build Apple clients** with
+`distribute_to_testflight=true` on `main`:
 
-```text
-APPLE_TEAM_ID
-MATCH_GIT_URL
-```
+1. In App Store Connect, have an Account Holder enable API access. An Account
+   Holder or Admin must create a **Team** API key that can provision profiles
+   and upload builds. Do not use an Individual key: the workflow creates or
+   reuses the two App Store provisioning profiles through the provisioning API.
+2. Export one active **Apple Distribution** certificate and its private key as
+   a password-protected `.p12` file. It must belong to Team `VTBJTFDTQY` and
+   remain active in Apple Developer.
+3. Create one internal TestFlight group, such as `Robur Test Group`. Its exact
+   name is required because the workflow waits for processing and assigns the
+   uploaded build to that group.
+4. Add the following configuration to GitHub's protected `production`
+   environment:
 
-Create a private Fastlane match repository and populate it from a trusted Mac:
+| Type | Name | Value / purpose |
+| --- | --- | --- |
+| Variable | `APPLE_TEAM_ID` | `VTBJTFDTQY` |
+| Variable | `APP_STORE_CONNECT_APP_ID` | `6801487531` for Robur Health |
+| Variable | `TESTFLIGHT_GROUP_NAME` | Exact pre-created internal beta-group name |
+| Secret | `APP_STORE_CONNECT_KEY_ID` | Team API key ID |
+| Secret | `APP_STORE_CONNECT_ISSUER_ID` | Team API key issuer ID |
+| Secret | `APP_STORE_CONNECT_PRIVATE_KEY_P8` | Literal `.p8` file contents; do not base64 encode it |
+| Secret | `APPLE_DISTRIBUTION_CERTIFICATE_P12` | Base64-encoded password-protected `.p12` |
+| Secret | `APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD` | Password used for that `.p12` |
+
+On a trusted Mac, copy the P12 in the format required by GitHub Secrets:
 
 ```bash
-cd apps/mobile/ios
-bundle install
-MATCH_GIT_URL=git@github.com:eojgroup/robur-apple-certificates.git \
-MATCH_PASSWORD=<new-password> \
-APPLE_TEAM_ID=<team-id> \
-bundle exec fastlane match appstore \
-  --app_identifier com.eojgroup.robur,com.eojgroup.robur.watchkitapp
+base64 -i RoburDistribution.p12 | pbcopy
 ```
 
-Before external TestFlight/App Store review, an administrator must complete the
-privacy policy, HealthKit purpose strings/disclosures, app privacy labels,
-export compliance, age rating, screenshots, support URL, and review metadata.
+The workflow imports the certificate into an isolated temporary keychain,
+creates or renews only the two matching App Store profiles, archives and exports
+the IPA, uploads it, then removes signing material. It derives a unique build
+number from the GitHub workflow run, so repeated TestFlight uploads do not
+collide with the local version number.
 
-## Future server-side HealthKit sync
+Before external TestFlight or App Store review, complete the privacy policy,
+HealthKit purpose disclosures, App Privacy labels, export compliance, age
+rating, screenshots, support URL, and review metadata. HealthKit data must not
+be used for advertising or sale.
 
-The current iPhone app reads HealthKit only on device. It does not upload health
-data and the static web mock-up has no API connection. Do not add a shared
-HealthKit ingest token to an iOS app, watch app, Firebase config, or GitHub
-secret. Before enabling a backend, implement per-user authentication, consent,
-ownership checks, rate limiting, audit logging, retention/deletion, and an
-updated security review.
+## CI Repair Agent oversight
 
-## CI Repair Agent
-
-The agent has no third-party AI key or GitHub secret. Repository administrators
-should review its configuration and decide whether its GitHub App/GITHUB_TOKEN
-may create draft branches and pull requests. Its scope, safeguards, and recipe
-extension process are documented in [CI Repair Agent](ci-repair-agent.md).
+The repair agent has no LLM service, third-party webhook, database, or added
+secret. It runs as a repair-only job inside `terraform-deploy.yml`, creates only
+a draft PR, and never auto-merges or applies Terraform in its repair path.
+Administrators should review changes to `.github/ci-repair-agent.json` like
+production automation code. Its trust boundary and recipe process are in
+[CI Repair Agent](ci-repair-agent.md).

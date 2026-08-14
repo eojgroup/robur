@@ -1,30 +1,41 @@
-name: Future GKE / Cloud SQL deployment (disabled by default)
+name: Terraform Infrastructure Deployment
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "infra/gcp/terraform/**"
+      - "infra/scripts/terraform-init-retry.sh"
+      - ".github/workflows/terraform-deploy.yml"
   workflow_dispatch:
     inputs:
       apply_production:
-        description: "Apply the deferred GKE / Cloud SQL architecture after explicitly enabling it"
-        required: true
+        description: "Apply the reviewed production infrastructure plan"
+        required: false
         default: false
         type: boolean
+  repository_dispatch:
+    types:
+      - ci-repair
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
-  group: robur-production-deploy
+  group: ${{ github.event_name == 'repository_dispatch' && format('robur-ci-repair-{0}', github.event.client_payload.run_id || github.run_id) || 'robur-production-deploy' }}
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Terraform + Cloud SQL + GKE
-    # The static web mock-up uses Firebase Hosting. Set the protected production variable
-    # ENABLE_FUTURE_BACKEND=true only after an intentional backend architecture review.
-    if: inputs.apply_production == true && vars.ENABLE_FUTURE_BACKEND == 'true'
+    name: Terraform, Cloud SQL, and GKE configuration
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply_production == true)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     environment: production
+    permissions:
+      contents: read
+      id-token: write
     env:
       PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       REGION: ${{ vars.GCP_REGION || 'europe-west2' }}
@@ -38,22 +49,34 @@ jobs:
       TF_VAR_github_repository: ${{ github.repository }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: Check deployment configuration
+        shell: bash
+        env:
+          WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          TERRAFORM_SERVICE_ACCOUNT: ${{ vars.GCP_TERRAFORM_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          test -n "$PROJECT_ID"
+          test -n "$TF_STATE_BUCKET"
+          test -n "$WORKLOAD_IDENTITY_PROVIDER"
+          test -n "$TERRAFORM_SERVICE_ACCOUNT"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.8.5
           terraform_wrapper: false
 
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_TERRAFORM_SERVICE_ACCOUNT }}
 
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
+      - name: Set up gcloud and GKE authentication
+        uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.PROJECT_ID }}
           install_components: gke-gcloud-auth-plugin
@@ -75,36 +98,52 @@ jobs:
         working-directory: infra/gcp/terraform
         run: terraform apply -auto-approve -lock-timeout=5m tfplan
 
-      - name: Capture Terraform outputs
+      - name: Capture and mask Terraform outputs
         id: tf_out
         working-directory: infra/gcp/terraform
+        shell: bash
         run: |
+          set -euo pipefail
+          instance_connection_name="$(terraform output -raw instance_connection_name)"
+          private_ip_address="$(terraform output -raw private_ip_address)"
+          db_name="$(terraform output -raw db_name)"
+          db_user="$(terraform output -raw db_user)"
+          db_pass="$(terraform output -raw db_pass)"
+          gke_cluster_name="$(terraform output -raw gke_cluster_name)"
+          workload_identity_provider="$(terraform output -raw workload_identity_provider)"
+          github_deploy_service_account="$(terraform output -raw github_deploy_service_account)"
+          echo "::add-mask::$db_pass"
           {
-            echo "instance_connection_name=$(terraform output -raw instance_connection_name)"
-            echo "private_ip_address=$(terraform output -raw private_ip_address)"
-            echo "db_name=$(terraform output -raw db_name)"
-            echo "db_user=$(terraform output -raw db_user)"
-            echo "db_pass=$(terraform output -raw db_pass)"
-            echo "gke_cluster_name=$(terraform output -raw gke_cluster_name)"
-            echo "workload_identity_provider=$(terraform output -raw workload_identity_provider)"
-            echo "github_deploy_service_account=$(terraform output -raw github_deploy_service_account)"
+            echo "instance_connection_name=$instance_connection_name"
+            echo "private_ip_address=$private_ip_address"
+            echo "db_name=$db_name"
+            echo "db_user=$db_user"
+            echo "db_pass=$db_pass"
+            echo "gke_cluster_name=$gke_cluster_name"
+            echo "workload_identity_provider=$workload_identity_provider"
+            echo "github_deploy_service_account=$github_deploy_service_account"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Mask DB secret
-        run: echo "::add-mask::${{ steps.tf_out.outputs.db_pass }}"
-
       - name: Get GKE credentials
-        run: gcloud container clusters get-credentials "${{ steps.tf_out.outputs.gke_cluster_name }}" --region "${REGION}" --project "${PROJECT_ID}"
+        run: gcloud container clusters get-credentials "${{ steps.tf_out.outputs.gke_cluster_name }}" --region "$REGION" --project "$PROJECT_ID"
 
       - name: Ensure namespace and service accounts
+        shell: bash
         run: |
+          set -euo pipefail
           kubectl apply -f infra/k8s/namespace.yaml
           sed "s/PROJECT_ID/${PROJECT_ID}/g" infra/k8s/config/serviceaccounts.yaml | kubectl apply -f -
 
       - name: Upsert runtime configuration
+        shell: bash
         run: |
-          kubectl -n "${K8S_NAMESPACE}" apply -f infra/k8s/config/robur-config.yaml
-          kubectl -n "${K8S_NAMESPACE}" patch configmap robur-config --type merge -p "{\"data\":{\"INSTANCE_CONNECTION_NAME\":\"${{ steps.tf_out.outputs.instance_connection_name }}\",\"CORS_ORIGIN\":\"https://${{ vars.WEB_DOMAIN_NAME || 'robur.fit' }}\"}}"
+          set -euo pipefail
+          kubectl -n "$K8S_NAMESPACE" apply -f infra/k8s/config/robur-config.yaml
+          patch="$(node -e 'process.stdout.write(JSON.stringify({data:{INSTANCE_CONNECTION_NAME:process.env.INSTANCE_CONNECTION_NAME,CORS_ORIGIN:`https://${process.env.WEB_DOMAIN_NAME}`}}))')"
+          kubectl -n "$K8S_NAMESPACE" patch configmap robur-config --type merge -p "$patch"
+        env:
+          INSTANCE_CONNECTION_NAME: ${{ steps.tf_out.outputs.instance_connection_name }}
+          WEB_DOMAIN_NAME: ${{ vars.WEB_DOMAIN_NAME || 'robur.fit' }}
 
       - name: Upsert database connection secret
         env:
@@ -112,10 +151,202 @@ jobs:
           DB_USER: ${{ steps.tf_out.outputs.db_user }}
           DB_PASS: ${{ steps.tf_out.outputs.db_pass }}
           DB_PRIVATE_IP: ${{ steps.tf_out.outputs.private_ip_address }}
+        shell: bash
         run: |
-          kubectl -n "${K8S_NAMESPACE}" create secret generic robur-db \
-            --from-literal=DB_USER="${DB_USER}" \
-            --from-literal=DB_PASSWORD="${DB_PASS}" \
+          set -euo pipefail
+          kubectl -n "$K8S_NAMESPACE" create secret generic robur-db \
+            --from-literal=DB_USER="$DB_USER" \
+            --from-literal=DB_PASSWORD="$DB_PASS" \
             --from-literal=DATABASE_URL="postgres://${DB_USER}:${DB_PASS}@127.0.0.1:5432/${DB_NAME}" \
             --from-literal=FLYWAY_URL="jdbc:postgresql://${DB_PRIVATE_IP}:5432/${DB_NAME}?sslmode=require" \
             --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Reconcile HealthKit ingest token version
+        env:
+          HEALTHKIT_INGEST_TOKEN: ${{ secrets.HEALTHKIT_INGEST_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          secret_id="robur-healthkit-ingest-token"
+          if [[ -n "${HEALTHKIT_INGEST_TOKEN:-}" ]]; then
+            candidate="$RUNNER_TEMP/healthkit-token-candidate"
+            current="$RUNNER_TEMP/healthkit-token-current"
+            printf '%s' "$HEALTHKIT_INGEST_TOKEN" > "$candidate"
+            if gcloud secrets versions access latest "$secret_id" --project "$PROJECT_ID" > "$current" 2>/dev/null \
+              && cmp -s "$candidate" "$current"; then
+              echo "The latest enabled HealthKit ingest token already matches; no version was added."
+            else
+              gcloud secrets versions add "$secret_id" --project "$PROJECT_ID" --data-file="$candidate" >/dev/null
+              echo "Added a new enabled HealthKit ingest token version."
+            fi
+          elif [[ -z "$(gcloud secrets versions list "$secret_id" --project "$PROJECT_ID" --filter='state=ENABLED' --limit=1 --format='value(name)')" ]]; then
+            echo "::error::Set the production environment secret HEALTHKIT_INGEST_TOKEN before deploying workloads." >&2
+            exit 1
+          else
+            echo "HEALTHKIT_INGEST_TOKEN is not set; preserving the existing enabled secret version."
+          fi
+
+      - name: Publish deployment outputs
+        run: |
+          {
+            echo "### Robur infrastructure"
+            echo
+            echo "- GKE cluster: \`${{ steps.tf_out.outputs.gke_cluster_name }}\`"
+            echo "- GitHub OIDC provider: \`${{ steps.tf_out.outputs.workload_identity_provider }}\`"
+            echo "- Deployment service account: \`${{ steps.tf_out.outputs.github_deploy_service_account }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  repair:
+    name: Diagnose and safely repair trusted CI failure
+    if: github.event_name == 'repository_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPAIR_CONFIG: .github/ci-repair-agent.json
+      FAILED_RUN_ID: ${{ github.event.client_payload.run_id }}
+    steps:
+      - name: Check out the trusted default branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Fetch failed run metadata and logs
+        id: failed_run
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$FAILED_RUN_ID" =~ ^[0-9]+$ ]] || { echo "run_id must be numeric" >&2; exit 1; }
+          mkdir -p .ci-repair
+          completed=false
+          for attempt in $(seq 1 12); do
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FAILED_RUN_ID}" > .ci-repair/run.json
+            if [[ "$(jq -r .status .ci-repair/run.json)" == "completed" ]]; then
+              completed=true
+              break
+            fi
+            sleep 5
+          done
+          [[ "$completed" == "true" ]] || { echo "Failed run did not reach completed state." >&2; exit 1; }
+          for attempt in 1 2 3; do
+            if gh run view "$FAILED_RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > .ci-repair/failed.log; then
+              break
+            fi
+            if [[ "$attempt" == "3" ]]; then
+              echo "Unable to retrieve failed workflow logs." >&2
+              exit 1
+            fi
+            sleep "$((attempt * 3))"
+          done
+          if [[ ! -s .ci-repair/failed.log ]]; then
+            echo "The failed run did not expose a failed-step log." > .ci-repair/failed.log
+          fi
+          echo "run_id=$FAILED_RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Diagnose against reviewed recipes
+        id: diagnose
+        run: |
+          node scripts/ci-repair-agent.mjs diagnose \
+            --config "$REPAIR_CONFIG" \
+            --run .ci-repair/run.json \
+            --log .ci-repair/failed.log \
+            --report .ci-repair/report.md \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Set up Node for lockfile repair
+        if: steps.diagnose.outputs.recipe_id == 'pnpm-lockfile-out-of-date'
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Set up Terraform for formatting repair
+        if: steps.diagnose.outputs.recipe_id == 'terraform-format'
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.8.5
+          terraform_wrapper: false
+
+      - name: Apply bounded repair recipe
+        if: steps.diagnose.outputs.should_repair == 'true'
+        run: node scripts/ci-repair-agent.mjs repair --config "$REPAIR_CONFIG" --recipe "${{ steps.diagnose.outputs.recipe_id }}"
+
+      - name: Enforce changed-file and diff-size boundaries
+        id: diff
+        if: steps.diagnose.outputs.should_repair == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node scripts/ci-repair-agent.mjs verify-diff --config "$REPAIR_CONFIG" --recipe "${{ steps.diagnose.outputs.recipe_id }}"
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+
+      - name: Validate the proposed repair locally
+        if: steps.diagnose.outputs.should_repair == 'true' && steps.diff.outputs.has_changes == 'true'
+        run: node scripts/ci-repair-agent.mjs validate --config "$REPAIR_CONFIG" --recipe "${{ steps.diagnose.outputs.recipe_id }}"
+
+      - name: Create draft repair pull request
+        id: pull_request
+        if: steps.diagnose.outputs.should_repair == 'true' && steps.diff.outputs.has_changes == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id="${{ steps.failed_run.outputs.run_id }}"
+          recipe_id="${{ steps.diagnose.outputs.recipe_id }}"
+          branch="automation/ci-repair/${run_id}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "A repair branch already exists for this run; refusing to overwrite it." >&2
+            exit 1
+          fi
+          git switch --create "$branch"
+          git config user.name "robur-ci-repair[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(ci): repair ${recipe_id}"
+          git push origin "$branch"
+          pr_url="$(gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base "${{ github.event.repository.default_branch }}" \
+            --head "$branch" \
+            --title "fix(ci): repair ${recipe_id}" \
+            --body-file .ci-repair/report.md \
+            --draft)"
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch validate-only checks on repair branch
+        if: steps.pull_request.outputs.branch != ''
+        run: gh workflow run "${{ steps.diagnose.outputs.validation_workflow }}" --repo "$GITHUB_REPOSITORY" --ref "${{ steps.pull_request.outputs.branch }}"
+
+      - name: Publish diagnosis summary
+        if: always() && hashFiles('.ci-repair/report.md') != ''
+        run: cat .ci-repair/report.md >> "$GITHUB_STEP_SUMMARY"
+
+  notify-repair:
+    name: Queue trusted CI repair diagnosis
+    if: >-
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      needs.deploy.result == 'failure'
+    needs:
+      - deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Dispatch repair observer
+        run: |
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" \
+            -f event_type=ci-repair \
+            -f "client_payload[run_id]=${GITHUB_RUN_ID}"

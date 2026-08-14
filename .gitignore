@@ -25,10 +25,5 @@ infra/gcp/terraform/*.tfstate
 infra/gcp/terraform/*.tfstate.*
 infra/gcp/terraform/*.tfvars
 !infra/gcp/terraform/*.tfvars.example
-infra/gcp/hosting/.terraform/
-infra/gcp/hosting/*.tfstate
-infra/gcp/hosting/*.tfstate.*
-infra/gcp/hosting/*.tfvars
-!infra/gcp/hosting/*.tfvars.example
 .ci-repair/
 gha-creds-*.json

@@ -36,7 +36,7 @@ export function isTrustedRun(run, config, expectedRepository = config.repository
   return (
     run.status === "completed" &&
     run.conclusion === "failure" &&
-    run.event === "push" &&
+    ["push", "workflow_dispatch"].includes(run.event) &&
     run.head_branch === config.baseBranch &&
     repository === expectedRepository &&
     config.monitoredWorkflows.includes(workflowName)
@@ -193,7 +193,7 @@ function commandDiagnose(argumentsList) {
   const log = redactSensitive(truncateText(rawLog, config.limits.maxLogBytes));
   const recipe = trusted ? selectRecipe(config, log) : null;
   const reason = !trusted
-    ? "Run does not meet the trusted push-to-base-branch policy; no repair was attempted."
+    ? "Run does not meet the trusted default-branch push or manual-dispatch policy; no repair was attempted."
     : recipe
       ? "A bounded recipe is available for local repair and validation."
       : "No safe recipe matched the sanitized failure log; no repair was attempted.";

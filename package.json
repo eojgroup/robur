@@ -11,7 +11,6 @@
     "typecheck": "pnpm --filter @robur/core build && pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test && node --test scripts/ci-repair-agent.test.mjs",
     "apple:generate": "cd apps/mobile/ios && ruby generate_xcodeproj.rb",
-    "apple:beta": "cd apps/mobile/ios && bundle exec fastlane ios beta",
     "infra:fmt": "terraform -chdir=infra/gcp/terraform fmt -recursive",
     "infra:validate": "terraform -chdir=infra/gcp/terraform validate",
     "generate:icons": "node scripts/generate-icons.mjs"

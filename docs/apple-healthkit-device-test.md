@@ -1,9 +1,8 @@
 # Apple HealthKit Device Validation
 
-This is the first release milestone: prove the iPhone/iPad and Apple Watch
-read approved Apple Health data locally. Do not deploy GCP, configure a server
-secret, create an App Store Connect API key, or enable push notifications for
-this milestone.
+This device check proves the iPhone/iPad and Apple Watch read approved Apple
+Health data locally. GCP and TestFlight delivery are separate concerns; neither
+is needed to validate HealthKit reads on a physical device.
 
 ## What the current app does
 
@@ -51,8 +50,8 @@ approved data is available instead of claiming a permission denial.
    provisioning profiles.
 
 3. Obtain the Apple Developer Team ID. For local development the generated
-   project uses automatic signing in Debug; the TestFlight Release configuration
-   remains manual for Fastlane Match later. You can first try a free Xcode
+   project uses automatic signing in Debug; the protected TestFlight workflow
+   configures direct manual distribution signing. You can first try a free Xcode
    Personal Team for a personal device test, but its App IDs, devices, and
    provisioning profiles expire after seven days. A paid Apple Developer Program
    team is required for TestFlight and App Store distribution; use it now if
@@ -99,12 +98,15 @@ Apple references: [register an App ID](https://developer.apple.com/help/account/
 `xcodebuild` or GitHub Actions can compile the project, but only this physical
 device test can confirm Apple Health authorization and real data availability.
 
-## Defer until the device test passes
+## Distribution after the device test
 
-- Create one App Store Connect iOS app record for `com.eojgroup.robur`; the
-  Watch app is embedded in that product.
-- Configure Fastlane Match, an App Store Connect API key, and TestFlight only
-  after this local test is successful.
+- Confirm the App Store Connect iOS record `Robur Health` (Apple ID
+  `6801487531`) uses `com.eojgroup.robur`; the Watch app is embedded in that
+  product.
+- Configure the direct-signing Team API key, Apple Distribution P12, and exact
+  internal TestFlight group documented in
+  [the Apple app README](../apps/mobile/ios/README.md). Fastlane Match and a
+  certificate repository are not used.
 - Publish an accurate privacy policy before external TestFlight or App Store
   distribution. It must describe the exact Health data used and any future
   sharing. HealthKit data must not be used for advertising or sale.

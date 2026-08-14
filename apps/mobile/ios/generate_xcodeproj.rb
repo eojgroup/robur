@@ -12,6 +12,6 @@ if File.exist?(version_file)
   end
 end
 
-ENV["APPLE_TEAM_ID"] ||= "REPLACE_IN_XCODE"
+ENV["APPLE_TEAM_ID"] ||= ENV["DEVELOPMENT_TEAM"] || "REPLACE_IN_XCODE"
 
 exec("xcodegen", "generate", "--spec", "project.yml")

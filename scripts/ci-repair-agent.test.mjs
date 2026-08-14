@@ -12,7 +12,7 @@ import {
 const config = {
   repository: "eojgroup/robur",
   baseBranch: "main",
-  monitoredWorkflows: ["Robur CI"],
+  monitoredWorkflows: ["Build and Deploy to GKE"],
   limits: { maxChangedFiles: 2, maxChangedLines: 10 },
   recipes: [
     {
@@ -30,7 +30,7 @@ const config = {
 
 const trustedRun = {
   id: 17,
-  name: "Robur CI",
+  name: "Build and Deploy to GKE",
   status: "completed",
   conclusion: "failure",
   event: "push",
@@ -55,8 +55,9 @@ test("selects only a reviewed matching recipe", () => {
   assert.equal(selectRecipe(config, "a different failure"), null);
 });
 
-test("trust policy rejects pull requests, branches, repositories, and unknown workflows", () => {
+test("trust policy accepts default-branch pushes and manual runs but rejects untrusted sources", () => {
   assert.equal(isTrustedRun(trustedRun, config), true);
+  assert.equal(isTrustedRun({ ...trustedRun, event: "workflow_dispatch" }, config), true);
   assert.equal(isTrustedRun({ ...trustedRun, event: "pull_request" }, config), false);
   assert.equal(isTrustedRun({ ...trustedRun, head_branch: "feature/x" }, config), false);
   assert.equal(isTrustedRun({ ...trustedRun, head_repository: { full_name: "attacker/robur" } }, config), false);
@@ -64,16 +65,16 @@ test("trust policy rejects pull requests, branches, repositories, and unknown wo
 });
 
 test("glob matching permits expected Terraform paths without allowing unrelated files", () => {
-  assert.equal(pathMatches("infra/gcp/hosting/main.tf", "infra/gcp/**/*.tf"), true);
+  assert.equal(pathMatches("infra/gcp/terraform/main.tf", "infra/gcp/**/*.tf"), true);
   assert.equal(pathMatches("infra/gcp/main.tf", "infra/gcp/**/*.tf"), true);
-  assert.equal(pathMatches("infra/gcp/hosting/terraform.tfvars", "infra/gcp/**/*.tf"), false);
+  assert.equal(pathMatches("infra/gcp/terraform/terraform.tfvars", "infra/gcp/**/*.tf"), false);
   assert.equal(pathMatches("README.md", "infra/gcp/**/*.tf"), false);
 });
 
 test("diff guard limits changed paths, files, lines, and binary output", () => {
   const recipe = config.recipes[1];
   assert.deepEqual(
-    validateDiff({ files: ["infra/gcp/hosting/main.tf"], numstat: ["2\t1\tinfra/gcp/hosting/main.tf"], recipe, limits: config.limits }),
+    validateDiff({ files: ["infra/gcp/terraform/main.tf"], numstat: ["2\t1\tinfra/gcp/terraform/main.tf"], recipe, limits: config.limits }),
     { valid: true, changedLines: 3 }
   );
   assert.equal(
@@ -81,7 +82,7 @@ test("diff guard limits changed paths, files, lines, and binary output", () => {
     false
   );
   assert.equal(
-    validateDiff({ files: ["infra/gcp/hosting/main.tf"], numstat: ["-\t-\tinfra/gcp/hosting/main.tf"], recipe, limits: config.limits }).valid,
+    validateDiff({ files: ["infra/gcp/terraform/main.tf"], numstat: ["-\t-\tinfra/gcp/terraform/main.tf"], recipe, limits: config.limits }).valid,
     false
   );
 });

@@ -10,7 +10,7 @@ variable "region" {
 }
 
 variable "zone" {
-  description = "Primary Google Cloud zone."
+  description = "Single workload-node zone inside the regional GKE control plane. Keeping one node location avoids the regional three-zone node multiplier."
   type        = string
   default     = "europe-west2-b"
 }

@@ -19,8 +19,9 @@ Options:
   --repository OWNER/REPO  GitHub repository (default: current repository).
   --help                   Show this help.
 
-Run this only after the first main Terraform apply. It requires an authenticated
-GitHub CLI user with repository administration permissions.
+Run this after the one-time keyless GitHub identity bootstrap and before the
+first workflow-driven Terraform apply. It requires an authenticated GitHub CLI
+user with repository administration permissions.
 EOF
 }
 
@@ -94,7 +95,11 @@ TF_STATE_BUCKET="$state_bucket" "$script_dir/terraform-init-retry.sh" "$terrafor
 
 workload_identity_provider="$(terraform -chdir="$terraform_dir" output -raw workload_identity_provider)"
 terraform_service_account="$(terraform -chdir="$terraform_dir" output -raw github_deploy_service_account)"
-cluster_name="$(terraform -chdir="$terraform_dir" output -raw gke_cluster_name)"
+# The keyless GitHub identity is bootstrapped before the first billable apply,
+# so the cluster output may not exist yet. The cluster name is intentionally
+# stable in the Terraform configuration and is reconciled on every later run.
+cluster_name="$(terraform -chdir="$terraform_dir" output -raw gke_cluster_name 2>/dev/null || true)"
+cluster_name="${cluster_name:-robur-cluster}"
 
 # This only creates the environment. Reviewer and branch-protection policy are
 # organization decisions and must be configured in GitHub by an administrator.

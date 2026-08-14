@@ -1,89 +1,119 @@
 # Robur technical structure
 
 Robur is a monorepo for a native Apple HealthKit experience and a web dashboard.
-The present release boundary is intentionally small: HealthKit remains on the
-device and the web app is a static, deployable product mock-up using shared demo
-domain data.
+Its web release is deployed on GKE with a small Node/Express API and private
+Cloud SQL database. This is an evaluation-scale architecture with explicit cost
+and availability trade-offs, not a scale-to-zero static-hosting setup.
 
 ## Applications
 
 ### Web
 
-`apps/web` is Vite + React. It is now an operational dashboard rather than a
-landing card: a responsive navigation shell, readiness, Health signals,
-recommendation, weekly plan, and recovery trend use semantic tokens and
-accessible controls. The styling takes the operational hierarchy, tokenized
-surfaces, data typography, focus handling, reduced-motion behavior, and mobile
-safe-area care of Claritas as principles without reusing its product content,
-branding, or assets.
+`apps/web` is a Vite + React operational dashboard. Its styling takes the
+operational hierarchy, tokenized surfaces, data typography, focus handling,
+reduced-motion behavior, and mobile safe-area care of Claritas as principles,
+without reusing Claritas branding, content, or assets.
 
-The web build imports no runtime API and can be safely published as static
-content. It is served by Firebase Hosting for the current feature-evaluation
-phase. The retained Nginx Dockerfile is for a future separately-reviewed backend
-architecture; it is not deployed today.
+The web image is served by Nginx in GKE. The current dashboard still renders
+the shared demo snapshot; deploying the API does not by itself authorize or
+implement HealthKit upload from an Apple device.
 
-### API
+### API and data services
 
-`apps/api` remains a Node/Express API shell with health, readiness, future
-HealthKit-sync, and push-registration endpoints. It is not deployed in the
-static web phase, and no web client talks to it. A production API requires a
-separate authentication, consent, retention, abuse-prevention, and cost review.
+`apps/api` is a Node/Express service behind the same GKE Ingress as the web
+application. The Ingress routes `/api` to the API and `/` to the web service.
+The API uses a Cloud SQL Auth Proxy sidecar to reach a private-IP Postgres 15
+instance. It has a workload-specific Google service account for Cloud SQL,
+Pub/Sub publishing, and read access to the server-side HealthKit ingest token.
+
+The token is mounted from Secret Manager through the GKE Secret Manager CSI
+driver. It is a server credential only: it must never be embedded in the iOS
+app, Watch app, browser bundle, source repository, or a command line.
 
 ### Apple clients
 
 `apps/mobile/ios` contains the SwiftUI iPhone/iPad app
 (`com.eojgroup.robur`) and embedded watchOS app
-(`com.eojgroup.robur.watchkitapp`). The iPhone/iPad client requests HealthKit
-read access and maps workouts, sleep, resting heart rate, HRV, and training
-totals on device. The watch UI is a local glance surface; it should not be
-described as a synced HealthKit client until a separate data/sync implementation
-exists.
+(`com.eojgroup.robur.watchkitapp`). The clients request HealthKit read access
+and calculate workouts, sleep, resting heart rate, HRV, and training totals on
+device. The Watch is a local companion surface; it is not a server-synced
+HealthKit client.
 
-## Shared domain model
-
-`packages/core` is the TypeScript source of truth for the static snapshot,
-starter plan, week summaries, formatters, and future payload normalization. The
-native client has a corresponding Swift model under
-`apps/mobile/ios/Sources/RoburShared`.
-
-## Current hosting architecture
+## Deployment and identity flow
 
 ```text
-GitHub Actions (manual main-only deploy)
-  -> GitHub OIDC short-lived token
-  -> narrow Firebase Hosting deployer service account
-  -> Firebase Hosting CDN + TLS
-  -> robur-505508.web.app, then robur.fit after DNS verification
+GitHub Actions on trusted main
+  -> GitHub OIDC, short-lived credentials only
+  -> Artifact Registry (web and API images)
+  -> regional GKE control plane / one-zone workload node
+      -> Nginx web pod
+      -> API pod + Cloud SQL Auth Proxy
+          -> private Cloud SQL Postgres
+          -> Secret Manager and Pub/Sub through workload identity
+  -> GKE Ingress + Google-managed certificate
+  -> robur.fit after the registrar A-record cutover
 ```
 
-`infra/gcp/hosting` declares the Firebase project association, Hosting site,
-optional custom-domain request, OIDC identity, narrow IAM grants, and optional
-budget alert. No credential key is stored. `firebase.json` supplies cache and
-basic security headers for the static release.
+`infra/gcp/terraform` declares the cloud resources and identities;
+`infra/k8s` declares workloads, services, migrations, the managed certificate,
+and Ingress. GitHub Actions authenticates using Workload Identity Federation,
+not a downloaded Google service-account key. The state bucket is versioned for
+recovery and deletes archived state versions after 90 days.
 
-The state bucket is provisioned by `infra/gcp/bootstrap`; it keeps versioning
-for recovery while removing archived state versions after 90 days.
+## Deliberate cost and availability boundary
 
-## Deferred backend architecture
+The GKE cluster control plane is regional (`europe-west2`), but its sole node
+pool is pinned to one zone (`europe-west2-b`) and contains one preemptible
+`e2-small` node. That is the important cost boundary: a normal regional node
+pool would create workload capacity across three zones. A one-zone Spot/
+preemptible pool is cheaper but can be interrupted and is not highly available.
 
-`infra/gcp/terraform`, `infra/k8s`, and the GKE/Cloud SQL workflows remain in
-the repository as a future architecture, but are intentionally disabled unless
-the protected `production` variable `ENABLE_FUTURE_BACKEND` is explicitly set
-to `true`. Those workflows also require a manual boolean input. This makes it
-impossible for normal web/UI work to create cluster, database, container, or
-load-balancer cost.
+Cloud SQL is `db-custom-1-3840`, zonal, private-IP only, encrypted in transit,
+backed up with point-in-time recovery, and configured `ALWAYS` on. It is a
+fixed recurring cost even with no traffic. The first Ingress also creates an
+external Application Load Balancer, which is another recurring/usage-based
+cost. Artifact Registry keeps five recent images and deletes images older than
+14 days; the event topic has one-day retention.
+
+There is no automatic scale-to-zero or automatic cost shutdown in this design.
+Cloud Billing budgets must be created manually by a billing-account
+administrator and are alerts, not hard caps. GKE and Cloud SQL deletion
+protection intentionally make a later teardown a reviewed operational change.
+
+## Domain and TLS
+
+The GKE deploy workflow creates the Ingress and its `ManagedCertificate`. It
+prints the allocated external IP in its run summary. The DNS owner must replace
+the root `A` record for `robur.fit` with that exact IP and preserve unrelated
+DNS records. Google-managed TLS becomes active only after public DNS resolves
+to the Ingress. Treat the IP as a deployment output: if the Ingress is deleted
+and recreated, obtain the new output and repeat the cutover.
+
+## Legacy Firebase state
+
+The GCP project has an irreversible, dormant Firebase association/default
+site from an earlier static-hosting experiment. It is not part of the active
+architecture: no Firebase configuration, Terraform root, GitHub workflow, or
+runtime resource remains in this repository. Its unverified `robur.fit`
+custom-domain mapping and dedicated GitHub deploy identity have been removed.
+Do not use a Firebase URL, token, service-account key, or DNS record for this
+deployment.
 
 ## CI/CD
 
-- **Robur CI** runs Node validation and all Terraform roots on Linux. Apple
-  compilation lives only in the targeted Apple workflow, avoiding duplicate
-  macOS runner cost.
-- **Build Apple clients** compiles iPhone, iPad, and Watch when Apple sources
-  change; TestFlight remains explicitly gated.
-- **Deploy web mock-up** is a manual `main`-only Firebase Hosting release using
-  OIDC. It has no GCP secret.
-- **Future GKE / Cloud SQL deployment** and **Future GKE application
-  deployment** are hard-disabled until a deliberate backend approval.
-- **CI Repair Agent** observes selected failed trusted-main runs, uses reviewed
-  deterministic recipes, validates a bounded diff, then creates a draft PR.
-  See [CI Repair Agent](ci-repair-agent.md).
+The repository has exactly three workflows:
+
+- **Build Apple clients** (`apple-build.yml`) compiles the Apple targets on
+  relevant push/PR changes. TestFlight distribution is a separate manual
+  `main` dispatch.
+- **Terraform Infrastructure Deployment** (`terraform-deploy.yml`) validates
+  and applies infrastructure on trusted `main` infrastructure changes, or on
+  an explicit production dispatch. It also hosts the CI Repair Agent job.
+- **Build and Deploy to GKE** (`gke-deploy.yml`) validates deployable changes
+  on PRs and builds/deploys web/API images on relevant trusted `main` pushes.
+
+The repair job is deliberately integrated into the Terraform workflow so it
+does not add a fourth workflow. It receives only a failed-run reference,
+revalidates that the referenced run is a trusted failed `main` push or manual
+dispatch, and can open a draft PR using a reviewed mechanical recipe. Details are in
+[CI Repair Agent](ci-repair-agent.md).

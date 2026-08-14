@@ -22,15 +22,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.distribute_to_testflight == true && 'testflight' || 'build' }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || inputs.distribute_to_testflight != true }}
 
 jobs:
   build:
     name: Compile iPhone, iPad, and Watch
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -89,36 +89,198 @@ jobs:
     needs: build
     runs-on: macos-latest
     environment: production
+    timeout-minutes: 45
     env:
       APP_BUNDLE_ID: com.eojgroup.robur
-      TESTFLIGHT_GROUP_NAME: Robur Test Group
-      DEVELOPMENT_TEAM: ${{ vars.APPLE_TEAM_ID }}
-      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
-      APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
-      APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
-      MATCH_GIT_URL: ${{ vars.MATCH_GIT_URL }}
-      MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+      APP_STORE_CONNECT_APP_ID: ${{ vars.APP_STORE_CONNECT_APP_ID }}
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      TESTFLIGHT_GROUP_NAME: ${{ vars.TESTFLIGHT_GROUP_NAME }}
+      APP_WORKFLOW_RUN_NUMBER: ${{ github.run_number }}
+      APP_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_PRIVATE_KEY_P8: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY_P8 }}
+      APPLE_DISTRIBUTION_CERTIFICATE_P12: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_P12 }}
+      APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.3"
-          bundler-cache: true
-          working-directory: apps/mobile/ios
+      - uses: actions/checkout@v7
 
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Check signing credentials
+        id: signing
+        shell: bash
         run: |
-          test -n "${APP_STORE_CONNECT_API_KEY_ID}"
-          test -n "${APP_STORE_CONNECT_API_ISSUER_ID}"
-          test -n "${APP_STORE_CONNECT_API_KEY}"
-          test -n "${MATCH_GIT_URL}"
-          test -n "${MATCH_PASSWORD}"
+          set -euo pipefail
+          required=(
+            APPLE_TEAM_ID
+            APP_STORE_CONNECT_APP_ID
+            APP_STORE_CONNECT_KEY_ID
+            APP_STORE_CONNECT_ISSUER_ID
+            APP_STORE_CONNECT_PRIVATE_KEY_P8
+            APPLE_DISTRIBUTION_CERTIFICATE_P12
+            APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD
+            TESTFLIGHT_GROUP_NAME
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if [[ "${#missing[@]}" -gt 0 ]]; then
+            printf 'Missing production signing configuration: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
 
-      - name: Upload to TestFlight
+          # CFBundleVersion must be unique in App Store Connect. Use a
+          # monotonically increasing, Apple-valid three-component identifier
+          # while keeping the human marketing version in VERSION.
+          # A re-run retains github.run_number, so fold github.run_attempt into
+          # the ordinal to avoid retrying an already-uploaded CFBundleVersion.
+          if (( APP_WORKFLOW_RUN_ATTEMPT > 99 )); then
+            echo "GitHub run attempt exceeds the supported two-digit build-number segment." >&2
+            exit 1
+          fi
+          build_ordinal=$((APP_WORKFLOW_RUN_NUMBER * 100 + APP_WORKFLOW_RUN_ATTEMPT))
+          build_major=$((1000 + build_ordinal / 10000))
+          build_minor=$(((build_ordinal / 100) % 100))
+          build_patch=$((build_ordinal % 100))
+          echo "APP_BUILD_NUMBER=${build_major}.${build_minor}.${build_patch}" >> "$GITHUB_ENV"
+
+      - name: Install direct-signing project dependency
+        run: gem install xcodeproj --no-document
+
+      - name: Generate release project
         working-directory: apps/mobile/ios
-        run: bundle exec fastlane ios beta
+        run: |
+          APPLE_TEAM_ID="$APPLE_TEAM_ID" BUILD_NUMBER="$APP_BUILD_NUMBER" ruby generate_xcodeproj.rb
+          ruby validate_xcodeproj.rb
+
+      - name: Prepare isolated signing keychain
+        shell: bash
+        run: |
+          set -euo pipefail
+          signing_dir="$RUNNER_TEMP/robur-signing"
+          mkdir -p "$signing_dir" "$HOME/.private_keys"
+          printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY_P8" > "$signing_dir/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+          printf '%s' "$APPLE_DISTRIBUTION_CERTIFICATE_P12" | base64 --decode > "$signing_dir/distribution.p12"
+          openssl pkcs12 -in "$signing_dir/distribution.p12" -clcerts -nokeys -passin env:APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD -out "$signing_dir/distribution.pem"
+          openssl pkey -in "$signing_dir/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8" -check -noout
+          cp "$signing_dir/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8" "$HOME/.private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+
+          keychain_path="$RUNNER_TEMP/robur-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$signing_dir/distribution.p12" -P "$APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          identities="$(security find-identity -v -p codesigning "$keychain_path" | grep -E -c '"(Apple|iPhone) Distribution:' || true)"
+          if [[ "$identities" -lt 1 ]]; then
+            echo "The imported P12 does not contain an Apple Distribution identity and private key." >&2
+            exit 1
+          fi
+
+          {
+            echo "APP_STORE_CONNECT_PRIVATE_KEY_PATH=$signing_dir/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+            echo "DISTRIBUTION_CERTIFICATE_PATH=$signing_dir/distribution.pem"
+            echo "SIGNING_KEYCHAIN_PATH=$keychain_path"
+          } >> "$GITHUB_ENV"
+
+      - name: Prepare App Store provisioning profiles
+        working-directory: apps/mobile/ios
+        run: ruby prepare_app_store_profiles.rb
+
+      - name: Archive App Store build
+        working-directory: apps/mobile/ios
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Robur.xcodeproj \
+            -scheme Robur \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Robur.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$APP_STORE_CONNECT_PRIVATE_KEY_PATH" \
+            -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $SIGNING_KEYCHAIN_PATH" \
+            archive 2>&1 | tee "$RUNNER_TEMP/robur-archive.log"
+
+      - name: Export signed IPA
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$RUNNER_TEMP/Robur.xcarchive" \
+            -exportPath "$RUNNER_TEMP/robur-export" \
+            -exportOptionsPlist "$EXPORT_OPTIONS_PLIST" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$APP_STORE_CONNECT_PRIVATE_KEY_PATH" \
+            -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
+            2>&1 | tee "$RUNNER_TEMP/robur-export.log"
+
+      - name: Upload build to App Store Connect
+        shell: bash
+        run: |
+          set -euo pipefail
+          ipa_path="$(find "$RUNNER_TEMP/robur-export" -maxdepth 1 -name '*.ipa' -print -quit)"
+          if [[ -z "$ipa_path" ]]; then
+            echo "No IPA was produced by xcodebuild -exportArchive." >&2
+            exit 1
+          fi
+          xcrun altool --upload-app --type ios --file "$ipa_path" --apiKey "$APP_STORE_CONNECT_KEY_ID" --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID"
+
+      - name: Assign the preconfigured TestFlight group
+        run: ruby apps/mobile/ios/distribute_testflight.rb
+
+      - name: Upload archive diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: robur-apple-distribution-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/robur-archive.log
+            ${{ runner.temp }}/robur-export.log
+            ${{ runner.temp }}/Robur.xcarchive/Info.plist
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove signing material
+        if: always()
+        shell: bash
+        run: |
+          security delete-keychain "${SIGNING_KEYCHAIN_PATH:-}" || true
+          rm -f "$HOME/.private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+          rm -rf "$RUNNER_TEMP/robur-signing"
+
+  notify-repair:
+    name: Queue trusted CI repair diagnosis
+    if: >-
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      (needs.build.result == 'failure' || needs.testflight.result == 'failure')
+    needs:
+      - build
+      - testflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Dispatch repair observer
+        run: |
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" \
+            -f event_type=ci-repair \
+            -f "client_payload[run_id]=${GITHUB_RUN_ID}"

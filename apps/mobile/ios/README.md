@@ -11,20 +11,13 @@ The project contains one App Store product with two targets:
 
 ```bash
 brew install xcodegen
-bundle install
 pnpm generate:icons
-xcodegen generate --spec project.yml
+APPLE_TEAM_ID=<your-team-id> ruby generate_xcodeproj.rb
 open Robur.xcodeproj
 ```
 
-Set the signing team for both targets in Xcode or provide `APPLE_TEAM_ID` in CI.
-
-Claritas-style wrapper commands are also available:
-
-```bash
-ruby generate_xcodeproj.rb
-ruby validate_xcodeproj.rb
-```
+The generated project uses automatic signing for Debug. Release signing is
+configured only inside the protected TestFlight workflow.
 
 ## On-Device HealthKit MVP
 
@@ -47,11 +40,76 @@ capabilities, signing setup, and the real-device acceptance checks.
 
 ## TestFlight
 
-```bash
-bundle exec fastlane ios beta
+TestFlight uses direct signing in GitHub Actions; it does not use Fastlane,
+Match, a certificate repository, an Apple ID password, or a downloaded
+provisioning-profile secret.
+
+The release workflow is deliberately manual. In **Actions → Build Apple
+clients**, select `main` and set **distribute to TestFlight** to true. Ordinary
+pushes and pull requests only compile and test the targets.
+
+### One-time Apple setup
+
+Confirm these identifiers before releasing; App Store bundle identifiers cannot
+be changed after publication:
+
+```text
+App Store Connect app: Robur Health (Apple ID 6801487531)
+Primary iPhone/iPad ID: com.eojgroup.robur
+Embedded Watch ID:      com.eojgroup.robur.watchkitapp
 ```
 
-The lane expects App Store Connect, signing, and GitHub secrets described in
-`../../../docs/admin-manual-tasks.md`. The GitHub workflow now uploads only
-when a maintainer manually dispatches it with **distribute to TestFlight** set
-to true; ordinary pushes and pull requests compile only.
+In Apple Developer, register both explicit IDs and enable **HealthKit** on
+both. In App Store Connect, confirm that Apple ID `6801487531` has the primary
+bundle ID `com.eojgroup.robur`. The Watch app is embedded in that one iOS App
+Store Connect product.
+
+Create a **Team** App Store Connect API key with permission to provision and
+upload builds. Do not use an Individual key: the workflow creates/reuses
+profiles through the provisioning API. An Account Holder must enable API access,
+and an Account Holder or Admin creates the Team key.
+
+Export one active **Apple Distribution** certificate together with its private
+key as a password-protected `.p12` file. The certificate must belong to the
+same Apple team and be active in Apple Developer.
+
+### Protected GitHub configuration
+
+Add these to the `production` environment:
+
+```text
+Variables
+  APPLE_TEAM_ID                       Apple Developer Team ID
+  APP_STORE_CONNECT_APP_ID            6801487531 for Robur Health
+  TESTFLIGHT_GROUP_NAME               Exact pre-created internal beta group name
+
+Secrets
+  APP_STORE_CONNECT_KEY_ID            Team API key ID
+  APP_STORE_CONNECT_ISSUER_ID         Team API issuer ID
+  APP_STORE_CONNECT_PRIVATE_KEY_P8    Literal .p8 file contents, not base64
+  APPLE_DISTRIBUTION_CERTIFICATE_P12  Base64-encoded password-protected .p12
+  APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD
+```
+
+For the P12 secret on a trusted Mac:
+
+```bash
+base64 -i RoburDistribution.p12 | pbcopy
+```
+
+The workflow creates or renews only the two App Store provisioning profiles
+that match that certificate, imports them into an isolated temporary keychain,
+archives, exports, uploads the IPA, and removes the signing material at the
+end of the job.
+
+Before the first upload, create one internal TestFlight group (for example,
+`Robur Test Group`) in App Store Connect and set `TESTFLIGHT_GROUP_NAME` to
+its name character-for-character. The workflow requires exactly one matching
+group, waits for processing, and assigns the build to it. External testers can
+still require Apple beta review.
+
+`VERSION` controls the human marketing version. The workflow derives a unique
+Apple-valid build number from the GitHub workflow run, so repeated TestFlight
+releases do not collide with build `1`. The current local-only application has
+no custom cryptography, so both app targets declare exempt encryption; revisit
+that declaration before adding non-exempt encryption.
