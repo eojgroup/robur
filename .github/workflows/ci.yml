@@ -49,15 +49,27 @@ jobs:
         with:
           terraform_version: 1.8.5
 
-      - name: Init without backend
+      - name: Init bootstrap without backend
+        working-directory: infra/gcp/bootstrap
+        run: terraform init -backend=false
+
+      - name: Format check bootstrap
+        working-directory: infra/gcp/bootstrap
+        run: terraform fmt -check -recursive
+
+      - name: Validate bootstrap
+        working-directory: infra/gcp/bootstrap
+        run: terraform validate
+
+      - name: Init main infrastructure without backend
         working-directory: infra/gcp/terraform
         run: terraform init -backend=false
 
-      - name: Format check
+      - name: Format check main infrastructure
         working-directory: infra/gcp/terraform
         run: terraform fmt -check -recursive
 
-      - name: Validate
+      - name: Validate main infrastructure
         working-directory: infra/gcp/terraform
         run: terraform validate
 
@@ -69,7 +81,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Check shell scripts
-        run: bash -n infra/scripts/terraform-init-retry.sh infra/scripts/wait-for-k8s-job.sh
+        run: bash -n infra/scripts/add-secret-version.sh infra/scripts/bootstrap-gcp.sh infra/scripts/configure-github-production.sh infra/scripts/terraform-init-retry.sh infra/scripts/wait-for-k8s-job.sh
 
       - name: Check placeholders stay explicit
         run: |

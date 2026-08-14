@@ -30,8 +30,12 @@ spec:
               valueFrom: { configMapKeyRef: { name: robur-config, key: INSTANCE_CONNECTION_NAME } }
             - name: DATABASE_URL
               valueFrom: { secretKeyRef: { name: robur-db, key: DATABASE_URL } }
-            - name: HEALTHKIT_INGEST_TOKEN
-              valueFrom: { secretKeyRef: { name: robur-healthkit, key: HEALTHKIT_INGEST_TOKEN, optional: true } }
+            - name: HEALTHKIT_INGEST_TOKEN_FILE
+              value: /var/run/secrets/healthkit/healthkit-ingest-token
+          volumeMounts:
+            - name: healthkit-ingest-token
+              mountPath: /var/run/secrets/healthkit
+              readOnly: true
           readinessProbe:
             httpGet: { path: /readyz, port: 8080 }
             initialDelaySeconds: 5
@@ -60,3 +64,10 @@ spec:
           resources:
             requests: { cpu: "25m", memory: "64Mi" }
             limits: { cpu: "100m", memory: "128Mi" }
+      volumes:
+        - name: healthkit-ingest-token
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: robur-healthkit-ingest-token

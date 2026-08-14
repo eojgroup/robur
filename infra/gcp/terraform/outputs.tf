@@ -43,8 +43,16 @@ output "db_pass" {
   sensitive = true
 }
 
-output "robur_sql_gsa_email" {
-  value = google_service_account.robur_sql_gsa.email
+output "robur_api_gsa_email" {
+  value = google_service_account.robur_api.email
+}
+
+output "robur_migrations_gsa_email" {
+  value = google_service_account.robur_migrations.email
+}
+
+output "gke_node_gsa_email" {
+  value = google_service_account.gke_nodes.email
 }
 
 output "fitness_events_topic" {

@@ -6,5 +6,5 @@ metadata:
 data:
   NODE_ENV: production
   PORT: "8080"
-  CORS_ORIGIN: https://app.robur.app
+  CORS_ORIGIN: https://robur.fit
   FITNESS_EVENTS_TOPIC: robur-fitness-events

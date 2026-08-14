@@ -50,7 +50,11 @@ struct FitnessRecommendation: Hashable {
   let rationale: String
 
   var prescription: String {
-    "\(durationMinutesMin)-\(durationMinutesMax) min / Zone \(zone)"
+    guard durationMinutesMin > 0, durationMinutesMax > 0, zone > 0 else {
+      return "Awaiting Health data"
+    }
+
+    return "\(durationMinutesMin)-\(durationMinutesMax) min / Zone \(zone)"
   }
 }
 
@@ -74,25 +78,20 @@ struct FitnessSnapshot: Hashable {
 enum RoburData {
   static let appName = "Robur"
 
-  static let today = FitnessSnapshot(
-    recoveryScore: 82,
-    trainingLoad: 64,
-    sleepMinutes: 468,
-    restingHeartRateBpm: 48,
-    heartRateVariabilityMs: 71,
+  static let noHealthData = FitnessSnapshot(
+    recoveryScore: 0,
+    trainingLoad: 0,
+    sleepMinutes: 0,
+    restingHeartRateBpm: 0,
+    heartRateVariabilityMs: 0,
     recommendation: FitnessRecommendation(
-      title: "Easy aerobic",
-      durationMinutesMin: 40,
-      durationMinutesMax: 55,
-      zone: 2,
-      rationale: "Your recovery is above baseline, but 7-day running load is +18%."
+      title: "Connect Apple Health",
+      durationMinutesMin: 0,
+      durationMinutesMax: 0,
+      zone: 0,
+      rationale: "Approve the requested Apple Health categories, then refresh to see your data."
     ),
-    week: WeekTotals(
-      runningKm: 38.4,
-      cyclingKm: 112,
-      strengthSessions: 2,
-      trainingMinutes: 402
-    )
+    week: WeekTotals(runningKm: 0, cyclingKm: 0, strengthSessions: 0, trainingMinutes: 0)
   )
 
   static let starterPlan: [TrainingSession] = [

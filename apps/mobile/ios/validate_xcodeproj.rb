@@ -6,7 +6,7 @@ required_paths = [
   "VERSION",
   "Sources/RoburApp/Info.plist",
   "Sources/RoburApp/Robur.entitlements",
-  "Sources/RoburApp/HealthKitClient.swift",
+  "Sources/RoburShared/HealthKitClient.swift",
   "Sources/RoburWatchApp/Info.plist",
   "Sources/RoburWatchApp/RoburWatch.entitlements",
   "Resources/Assets.xcassets/AppIcon.appiconset/Contents.json"

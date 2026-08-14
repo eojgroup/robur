@@ -1,0 +1,3 @@
+project_id        = "robur-000000"
+region            = "europe-west2"
+state_bucket_name = "robur-tf-state-robur-000000"

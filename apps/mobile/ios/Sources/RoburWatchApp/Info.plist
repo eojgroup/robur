@@ -21,9 +21,7 @@
   <key>CFBundleVersion</key>
   <string>$(CURRENT_PROJECT_VERSION)</string>
   <key>NSHealthShareUsageDescription</key>
-  <string>Robur reads workout and heart-rate data to show training readiness on Apple Watch.</string>
-  <key>NSHealthUpdateUsageDescription</key>
-  <string>Robur writes completed watch workouts to Health with your permission.</string>
+  <string>Robur reads your workouts, sleep, resting heart rate, heart rate variability, running workout distance, and cycling distance to show your training recommendation.</string>
   <key>WKApplication</key>
   <true/>
   <key>WKCompanionAppBundleIdentifier</key>

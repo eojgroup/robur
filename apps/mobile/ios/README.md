@@ -26,16 +26,24 @@ ruby generate_xcodeproj.rb
 ruby validate_xcodeproj.rb
 ```
 
-## HealthKit Shell
+## On-Device HealthKit MVP
 
 The app includes:
 
-- `Sources/RoburApp/HealthKitClient.swift` for HealthKit availability, authorization, and future query aggregation.
-- HealthKit entitlements on iOS and watchOS targets.
-- A Today screen with recovery, training load, sleep, resting HR, HRV, recommendation, and weekly totals.
-- A compact watchOS Today glance.
+- `Sources/RoburShared/HealthKitClient.swift` for HealthKit availability,
+  authorization, and on-device queries shared by the iPhone/iPad and Watch apps.
+- HealthKit entitlements on both targets.
+- Actual readings for sleep, resting HR, HRV, workouts, running workout
+  distance, cycling distance, strength sessions, and weekly training duration.
+- Explicit empty states; the app never substitutes fabricated health metrics.
 
-Apple Health data can only be read on device after user permission. The API receives only the app's user-approved summary payload through `/api/healthkit/sync`.
+Apple Health data can only be read on device after user permission. This MVP
+keeps data on device and does not call the Robur API, require GCP, or register
+for push notifications.
+
+Read [Apple HealthKit device validation](../../../docs/apple-healthkit-device-test.md)
+before the first device build. It lists the two Apple identifiers, HealthKit
+capabilities, signing setup, and the real-device acceptance checks.
 
 ## TestFlight
 
@@ -43,4 +51,7 @@ Apple Health data can only be read on device after user permission. The API rece
 bundle exec fastlane ios beta
 ```
 
-The lane expects App Store Connect, signing, and GitHub secrets described in `../../../docs/admin-manual-tasks.md`.
+The lane expects App Store Connect, signing, and GitHub secrets described in
+`../../../docs/admin-manual-tasks.md`. The GitHub workflow now uploads only
+when a maintainer manually dispatches it with **distribute to TestFlight** set
+to true; ordinary pushes and pull requests compile only.

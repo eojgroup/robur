@@ -33,10 +33,11 @@ pnpm dev:web
 
 The automated pieces are in place, but first deployment still requires administrator setup in Google Cloud, GitHub, Apple Developer, App Store Connect, and DNS.
 
-Start with [docs/admin-manual-tasks.md](docs/admin-manual-tasks.md), then use:
+Start with [the GCP project onboarding guide](docs/gcp-project-onboarding.md)
+and [the remaining administrator tasks](docs/admin-manual-tasks.md), then use:
 
-- `.github/workflows/terraform-deploy.yml` to apply Google Cloud infrastructure once OIDC is configured.
-- `.github/workflows/gke-deploy.yml` to build web/API containers, push them to Artifact Registry, and deploy to GKE.
+- `.github/workflows/terraform-deploy.yml` to apply Google Cloud infrastructure only when manually dispatched with `apply_production` enabled.
+- `.github/workflows/gke-deploy.yml` to build web/API containers, push them to Artifact Registry, and deploy to GKE only when manually dispatched with `deploy_production` enabled.
 - `.github/workflows/apple-build.yml` to compile iOS/iPadOS/watchOS and upload to TestFlight when signing is configured.
 
 ## Claritas Baseline

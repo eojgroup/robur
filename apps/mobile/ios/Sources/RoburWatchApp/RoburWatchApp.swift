@@ -10,7 +10,11 @@ struct RoburWatchApp: App {
 }
 
 struct RoburWatchRootView: View {
-  private let snapshot = RoburData.today
+  @StateObject private var healthKit = HealthKitClient()
+
+  private var snapshot: FitnessSnapshot {
+    healthKit.snapshot ?? RoburData.noHealthData
+  }
 
   var body: some View {
     NavigationStack {
@@ -18,9 +22,9 @@ struct RoburWatchRootView: View {
         Section("Today") {
           WatchScoreRow(title: "Recovery", value: snapshot.recoveryScore)
           WatchScoreRow(title: "Load", value: snapshot.trainingLoad)
-          Label(RoburData.duration(snapshot.sleepMinutes), systemImage: "moon.fill")
-          Label("\(snapshot.restingHeartRateBpm) bpm", systemImage: "heart.fill")
-          Label("\(snapshot.heartRateVariabilityMs) ms HRV", systemImage: "waveform.path.ecg")
+          Label(durationValue(snapshot.sleepMinutes), systemImage: "moon.fill")
+          Label(metricValue(snapshot.restingHeartRateBpm, unit: "bpm"), systemImage: "heart.fill")
+          Label(metricValue(snapshot.heartRateVariabilityMs, unit: "ms HRV"), systemImage: "waveform.path.ecg")
         }
 
         Section("Recommendation") {
@@ -32,9 +36,35 @@ struct RoburWatchRootView: View {
               .foregroundStyle(.secondary)
           }
         }
+
+        Section {
+          Text(healthKit.statusText)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Button(healthKit.authorizationRequested ? "Refresh Apple Health" : "Connect Apple Health") {
+            if healthKit.authorizationRequested {
+              Task {
+                await healthKit.refreshTodaySnapshot()
+              }
+            } else {
+              healthKit.requestAuthorization()
+            }
+          }
+        }
       }
       .navigationTitle("Robur")
+      .task {
+        await healthKit.refreshTodaySnapshot()
+      }
     }
+  }
+
+  private func durationValue(_ minutes: Int) -> String {
+    minutes > 0 ? RoburData.duration(minutes) : "—"
+  }
+
+  private func metricValue(_ value: Int, unit: String) -> String {
+    value > 0 ? "\(value) \(unit)" : "—"
   }
 }
 

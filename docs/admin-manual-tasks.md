@@ -12,10 +12,11 @@ Add repository variables:
 GCP_PROJECT_ID=<google-cloud-project-id>
 GCP_REGION=europe-west2
 GCP_ZONE=europe-west2-b
+GCP_TF_STATE_BUCKET=<unique Terraform state bucket name>
 GCP_WORKLOAD_IDENTITY_PROVIDER=<terraform output workload_identity_provider>
 GCP_TERRAFORM_SERVICE_ACCOUNT=<terraform output github_deploy_service_account>
 GKE_CLUSTER=robur-cluster
-WEB_DOMAIN_NAME=app.robur.app
+WEB_DOMAIN_NAME=robur.fit
 APPLE_TEAM_ID=<apple developer team id>
 APPLE_ID=<apple developer account email>
 APP_STORE_CONNECT_TEAM_ID=<app store connect team id>
@@ -25,7 +26,6 @@ MATCH_GIT_URL=<private fastlane match certificates repo>
 Add repository secrets:
 
 ```text
-HEALTHKIT_INGEST_TOKEN=<admin-generated random token>
 MATCH_PASSWORD=<fastlane match encryption password>
 APP_STORE_CONNECT_API_KEY_ID=<app store connect api key id>
 APP_STORE_CONNECT_API_ISSUER_ID=<app store connect issuer id>
@@ -41,53 +41,32 @@ Recommended repository controls:
 
 ## 2. Google Cloud
 
-Create or choose the production Google Cloud project.
-
-Before Terraform can use the GCS backend, an admin must bootstrap state once:
-
-```bash
-gcloud services enable storage.googleapis.com --project <project-id>
-gcloud storage buckets create gs://robur-tf-state --project <project-id> --location europe-west2
-gcloud storage buckets update gs://robur-tf-state --versioning
-```
-
-Create the initial GitHub OIDC bootstrap identity or run the first Terraform apply locally with owner credentials. After Terraform creates `workload_identity_provider` and `github_deploy_service_account`, store those outputs as GitHub variables.
-
-Run first infrastructure apply:
-
-```bash
-cd infra/gcp/terraform
-cp terraform.tfvars.example terraform.tfvars
-terraform init
-terraform plan
-terraform apply
-```
-
-Copy these outputs to GitHub variables:
-
-```text
-workload_identity_provider -> GCP_WORKLOAD_IDENTITY_PROVIDER
-github_deploy_service_account -> GCP_TERRAFORM_SERVICE_ACCOUNT
-gke_cluster_name -> GKE_CLUSTER
-```
+Follow [GCP project onboarding](gcp-project-onboarding.md). It replaces the
+manual state-bucket and GitHub OIDC bootstrap instructions with repository
+scripts and documents the few remaining account, billing, environment-approval,
+and DNS decisions.
 
 ## 3. DNS And GKE Ingress
 
-For `app.robur.app`:
+For `robur.fit`:
 
 1. Create or identify the managed DNS zone.
-2. Run `Terraform Infrastructure Deployment`.
-3. Run `Build and Deploy to GKE`.
+2. Manually dispatch `Terraform Infrastructure Deployment` with `apply_production` set to `true`.
+3. Manually dispatch `Build and Deploy to GKE` with `deploy_production` set to `true`.
 4. Get the GKE ingress IP:
 
 ```bash
 kubectl -n robur get ingress robur
 ```
 
-5. Create an `A` record for `app.robur.app` pointing to that IP.
+5. Create an `A` record for `robur.fit` pointing to that IP.
 6. Wait for the GKE managed certificate `robur-web-cert` to become active.
 
 ## 4. Apple Developer And HealthKit
+
+For the local, no-cloud HealthKit milestone, follow
+[Apple HealthKit device validation](apple-healthkit-device-test.md) before
+creating App Store Connect or TestFlight credentials.
 
 In Apple Developer, create these identifiers:
 
@@ -203,14 +182,14 @@ terraform apply
 Deploy runtime:
 
 1. Confirm GitHub variables/secrets are populated.
-2. Run `Terraform Infrastructure Deployment`.
-3. Run `Build and Deploy to GKE`.
-4. Open `https://app.robur.app` after DNS and certificate provisioning finish.
+2. Manually dispatch `Terraform Infrastructure Deployment` with `apply_production` set to `true`.
+3. Manually dispatch `Build and Deploy to GKE` with `deploy_production` set to `true`.
+4. Open `https://robur.fit` after DNS and certificate provisioning finish.
 
 Deploy Apple:
 
 1. Confirm Apple identifiers, HealthKit capability, App Store Connect app, API key, and match signing are ready.
-2. Run `Build Apple clients`.
+2. Manually dispatch `Build Apple clients` from `main` with `distribute_to_testflight` set to `true`.
 3. Confirm the build appears in TestFlight.
 
 ## 9. Current Environment Limits

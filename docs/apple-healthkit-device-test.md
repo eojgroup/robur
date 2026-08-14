@@ -1,0 +1,112 @@
+# Apple HealthKit Device Validation
+
+This is the first release milestone: prove the iPhone/iPad and Apple Watch
+read approved Apple Health data locally. Do not deploy GCP, configure a server
+secret, create an App Store Connect API key, or enable push notifications for
+this milestone.
+
+## What the current app does
+
+Both native targets use the same on-device `HealthKitClient` and request read
+access to workouts, sleep analysis, resting heart rate, HRV, and cycling
+distance. It then calculates a local Today snapshot:
+
+- Sleep is the union of approved asleep-stage samples in the latest 36 hours,
+  so overlapping Core, Deep, and REM samples are not double-counted.
+- Resting heart rate and HRV use the most recent sample in the past seven days.
+- Running totals use only `HKWorkout` records marked **Running**, so walking
+  distance is not accidentally reported as running.
+- Cycling uses cycling-workout distance when available, otherwise approved
+  cycling-distance samples; strength sessions and training duration come from
+  workouts this ISO week.
+
+All values remain on device. A read request completing successfully does not
+prove that every type was approved: Apple deliberately makes denied read access
+indistinguishable from an empty Health store. Robur therefore reports that no
+approved data is available instead of claiming a permission denial.
+
+## Manual Apple setup
+
+1. Install the full current Xcode release on the development Mac and sign into
+   Xcode with the Robur Apple Developer account. Command Line Tools alone cannot
+   build an iPhone or Apple Watch app. Install XcodeGen too:
+
+   ```bash
+   brew install xcodegen
+   ```
+
+2. Before creating anything in the Apple portal, confirm that these are the
+   final bundle IDs. An App Store app cannot change its bundle ID after release.
+   The code currently uses these **explicit** App IDs:
+
+   ```text
+   com.eojgroup.robur
+   com.eojgroup.robur.watchkitapp
+   ```
+
+   In Apple Developer > Certificates, Identifiers & Profiles, create or confirm
+   both IDs and enable **HealthKit** for both. Do not enable Clinical Health Records,
+   HealthKit Background Delivery, App Groups, or Push Notifications for this
+   local-read MVP. If the IDs already exist, changing a capability requires new
+   provisioning profiles.
+
+3. Obtain the Apple Developer Team ID. For local development the generated
+   project uses automatic signing in Debug; the TestFlight Release configuration
+   remains manual for Fastlane Match later. You can first try a free Xcode
+   Personal Team for a personal device test, but its App IDs, devices, and
+   provisioning profiles expire after seven days. A paid Apple Developer Program
+   team is required for TestFlight and App Store distribution; use it now if
+   Xcode cannot provision the HealthKit capability for the Personal Team.
+
+4. Generate the project with the real team ID, then open it in Xcode:
+
+   ```bash
+   cd apps/mobile/ios
+   APPLE_TEAM_ID=<your-10-character-team-id> ruby generate_xcodeproj.rb
+   open Robur.xcodeproj
+   ```
+
+   Confirm the selected team under Signing & Capabilities for `Robur` and
+   `RoburWatch Watch App`. Xcode automatic signing should make development
+   profiles for the two HealthKit-enabled IDs.
+
+5. Connect an iPhone on iOS 17 or later, trust the Mac, and enable Developer
+   Mode if iOS requests it. To verify Watch data, pair an Apple Watch on
+   watchOS 10 or later with that phone. Select the iPhone as the `Robur` scheme
+   destination and run it; the Watch companion is embedded in that build.
+
+Apple references: [register an App ID](https://developer.apple.com/help/account/identifiers/register-an-app-id), [enable capabilities](https://developer.apple.com/help/account/identifiers/enable-app-capabilities/), and [configure HealthKit access](https://developer.apple.com/documentation/xcode/configuring-healthkit-access).
+
+## Device acceptance test
+
+1. In the Health/Fitness apps, ensure the test account has a recent sleep
+   session with asleep stages, a resting-heart-rate sample, an HRV sample, a
+   running workout, a cycling workout or cycling-distance sample, and optionally
+   a strength workout. Let the Watch finish synchronizing to the phone.
+2. Run Robur on the phone, tap **Connect Apple Health**, and select the requested
+   read categories. If iOS offers limited or full historical access, use full
+   access for this test.
+3. Confirm the phone view shows real values rather than the empty-state dashes:
+   sleep is plausible and not inflated by sleep stages; RHR and HRV are recent;
+   running and cycling totals match the Health app for this week; strength and
+   training duration match workouts.
+4. Run the embedded Watch app and tap **Connect Apple Health** there too. Verify
+   that its Today values match the Health data available on the Watch.
+5. Test an empty or revoked-access case. The app should remain usable, show
+   **Connect Apple Health** / **No approved Apple Health data found yet**, and
+   never show sample placeholder metrics.
+
+`xcodebuild` or GitHub Actions can compile the project, but only this physical
+device test can confirm Apple Health authorization and real data availability.
+
+## Defer until the device test passes
+
+- Create one App Store Connect iOS app record for `com.eojgroup.robur`; the
+  Watch app is embedded in that product.
+- Configure Fastlane Match, an App Store Connect API key, and TestFlight only
+  after this local test is successful.
+- Publish an accurate privacy policy before external TestFlight or App Store
+  distribution. It must describe the exact Health data used and any future
+  sharing. HealthKit data must not be used for advertising or sale.
+
+See Apple's [HealthKit authorization guidance](https://developer.apple.com/documentation/healthkit/authorizing-access-to-health-data), [HealthKit privacy guidance](https://developer.apple.com/documentation/healthkit/protecting-user-privacy), and [TestFlight overview](https://developer.apple.com/help/app-store-connect/test-a-beta-version/testflight-overview/).

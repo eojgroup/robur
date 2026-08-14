@@ -5,10 +5,19 @@ set -euo pipefail
 terraform_dir="${1:?Usage: terraform-init-retry.sh <terraform-directory>}"
 attempts="${TERRAFORM_INIT_ATTEMPTS:-5}"
 base_delay_seconds="${TERRAFORM_INIT_RETRY_DELAY_SECONDS:-15}"
+state_bucket="${TF_STATE_BUCKET:-}"
+
+init_args=(-input=false -backend=true)
+if [[ -n "$state_bucket" ]]; then
+  init_args+=("-backend-config=bucket=$state_bucket")
+elif [[ "$terraform_dir" != *"/bootstrap" ]]; then
+  echo "TF_STATE_BUCKET must name the Terraform state bucket." >&2
+  exit 1
+fi
 
 for attempt in $(seq 1 "$attempts"); do
   echo "Running terraform init (attempt ${attempt}/${attempts})..."
-  if terraform -chdir="$terraform_dir" init -input=false -backend=true; then
+  if terraform -chdir="$terraform_dir" init "${init_args[@]}"; then
     exit 0
   fi
 

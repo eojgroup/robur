@@ -41,7 +41,11 @@ Endpoints:
 - `POST /api/healthkit/sync`
 - `POST /api/push/register`
 
-The API accepts an optional `x-healthkit-token` header when `HEALTHKIT_INGEST_TOKEN` is configured. Server-side HealthKit access is not possible; Apple Health data must be read on-device and synced by the iOS app with user permission.
+The API accepts an optional `x-healthkit-token` header when its server-only
+HealthKit ingest token is configured. In GKE the token is mounted from Google
+Secret Manager; no static token is shipped to an Apple client. Server-side
+HealthKit access is not possible; Apple Health data must be read on-device and
+synced by the iOS app with user permission.
 
 ### Apple
 
@@ -50,14 +54,15 @@ The API accepts an optional `x-healthkit-token` header when `HEALTHKIT_INGEST_TO
 - Universal iPhone/iPad target: `com.eojgroup.robur`
 - Embedded watchOS app: `com.eojgroup.robur.watchkitapp`
 
-The current native shell includes:
+The current native MVP includes:
 
-- HealthKit entitlement.
-- HealthKit authorization request flow.
-- Push Notifications entitlement and APNs registration shell.
-- Placeholder Today snapshot aggregation shell.
-- iPhone/iPad Today screen matching the mock-up.
-- watchOS compact Today/recommendation glance.
+- HealthKit entitlement on both targets.
+- HealthKit authorization and on-device query flow for workouts, sleep, resting
+  heart rate, HRV, and training totals.
+- Explicit empty states when a user has no available data or has not granted
+  read access.
+- iPhone/iPad Today screen and watchOS Today/recommendation glance backed by
+  real device data.
 
 ## Shared Code
 
@@ -76,14 +81,17 @@ The Apple app mirrors the initial model in Swift under `apps/mobile/ios/Sources/
 `infra/gcp/terraform` provisions the GCP baseline:
 
 - Required Google APIs.
-- GCS Terraform state bucket.
+- GCS Terraform state bucket, created by the separate bootstrap root because a
+  backend must exist before the main Terraform state can be initialized.
 - Artifact Registry repository: `robur-app`.
 - GKE cluster: `robur-cluster`.
 - Cloud SQL PostgreSQL instance: `robur-sql`.
 - Postgres database/user for Robur.
 - Pub/Sub topic: `robur-fitness-events`.
-- Secret Manager secret for HealthKit ingest token.
-- Workload Identity service account for GKE Cloud SQL access.
+- Secret Manager secret for the server-only HealthKit ingest token, mounted into
+  the API with the GKE Secret Manager add-on.
+- Dedicated node, API, and migration workload identities with only the required
+  Cloud SQL, Pub/Sub, image-pull, logging, monitoring, and secret-access roles.
 - GitHub Actions Workload Identity Pool/provider and deploy service account.
 
 `infra/gcp/sql` contains SQL migrations for HealthKit sync events and daily fitness snapshots.
@@ -101,6 +109,6 @@ The Apple app mirrors the initial model in Swift under `apps/mobile/ios/Sources/
 Workflows:
 
 - `Robur CI`: Node typecheck/test/build, Terraform validation, Kubernetes script checks, and unsigned Apple compile on macOS.
-- `Terraform Infrastructure Deployment`: applies GCP Terraform and upserts cluster config/secrets.
-- `Build and Deploy to GKE`: builds API/web containers, pushes to Artifact Registry, runs migrations, and deploys manifests.
-- `Build Apple clients`: compiles iPhone, iPad, Watch, then uploads to TestFlight when signing is configured.
+- `Terraform Infrastructure Deployment`: manually gated; applies GCP Terraform and upserts cluster config/secrets only when `apply_production` is enabled.
+- `Build and Deploy to GKE`: manually gated; builds API/web containers, pushes to Artifact Registry, runs migrations, and deploys manifests only when `deploy_production` is enabled.
+- `Build Apple clients`: compiles iPhone, iPad, Watch, then uploads to TestFlight only when manually dispatched with its distribution input enabled.

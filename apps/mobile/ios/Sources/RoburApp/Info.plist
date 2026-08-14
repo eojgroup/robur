@@ -20,18 +20,10 @@
   <string>$(MARKETING_VERSION)</string>
   <key>CFBundleVersion</key>
   <string>$(CURRENT_PROJECT_VERSION)</string>
-  <key>APNS_ENVIRONMENT</key>
-  <string>$(APNS_ENVIRONMENT)</string>
   <key>LSRequiresIPhoneOS</key>
   <true/>
-  <key>ROBUR_API_BASE_URL</key>
-  <string>https://app.robur.app</string>
   <key>NSHealthShareUsageDescription</key>
-  <string>Robur reads workout and heart-rate data to personalize training readiness.</string>
-  <key>NSHealthUpdateUsageDescription</key>
-  <string>Robur writes completed workouts to Health with your permission.</string>
-  <key>NSMotionUsageDescription</key>
-  <string>Robur uses motion data to improve workout tracking accuracy.</string>
+  <string>Robur reads your workouts, sleep, resting heart rate, heart rate variability, running workout distance, and cycling distance to personalize a training recommendation.</string>
   <key>UIApplicationSceneManifest</key>
   <dict>
     <key>UIApplicationSupportsMultipleScenes</key>
@@ -39,6 +31,10 @@
   </dict>
   <key>UILaunchScreen</key>
   <dict/>
+  <key>UIRequiredDeviceCapabilities</key>
+  <array>
+    <string>healthkit</string>
+  </array>
   <key>UISupportedInterfaceOrientations</key>
   <array>
     <string>UIInterfaceOrientationPortrait</string>

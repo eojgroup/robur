@@ -5,4 +5,4 @@ metadata:
   namespace: robur
 spec:
   domains:
-    - app.robur.app
+    - WEB_DOMAIN_NAME

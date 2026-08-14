@@ -3,12 +3,15 @@ data "google_project" "current" {
 }
 
 locals {
-  app_name        = "robur"
-  artifact_repo   = "robur-app"
-  cluster_name    = "robur-cluster"
-  sql_instance    = "robur-sql"
-  github_sa_id    = "terraform-github-oidc"
-  workload_pool   = "robur-oidc-pool"
+  app_name          = "robur"
+  artifact_repo     = "robur-app"
+  cluster_name      = "robur-cluster"
+  sql_instance      = "robur-sql"
+  github_sa_id      = "terraform-github-oidc"
+  gke_nodes_sa_id   = "robur-gke-nodes"
+  api_sa_id         = "robur-api-gsa"
+  migrations_sa_id  = "robur-migrations-gsa"
+  workload_pool     = "robur-oidc-pool"
   workload_provider = "gh-provider"
 }
 
@@ -32,27 +35,6 @@ resource "google_project_service" "enabled_services" {
   project            = var.project_id
   service            = each.value
   disable_on_destroy = false
-}
-
-resource "google_storage_bucket" "terraform_state" {
-  name                        = "robur-tf-state"
-  project                     = var.project_id
-  location                    = var.region
-  force_destroy               = false
-  storage_class               = "STANDARD"
-  uniform_bucket_level_access = true
-
-  versioning {
-    enabled = true
-  }
-
-  labels = {
-    app         = local.app_name
-    environment = var.environment
-    purpose     = "terraform-state"
-  }
-
-  depends_on = [google_project_service.enabled_services["storage.googleapis.com"]]
 }
 
 resource "google_artifact_registry_repository" "robur_app" {
@@ -116,12 +98,6 @@ resource "google_secret_manager_secret" "healthkit_ingest_token" {
   depends_on = [google_project_service.enabled_services["secretmanager.googleapis.com"]]
 }
 
-resource "google_secret_manager_secret_version" "healthkit_ingest_token" {
-  count       = trimspace(var.healthkit_ingest_token) == "" ? 0 : 1
-  secret      = google_secret_manager_secret.healthkit_ingest_token.id
-  secret_data = var.healthkit_ingest_token
-}
-
 resource "google_iam_workload_identity_pool" "github" {
   project                   = var.project_id
   workload_identity_pool_id = local.workload_pool
@@ -137,13 +113,14 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   display_name                       = "GitHub provider"
 
   attribute_mapping = {
-    "google.subject"       = "assertion.sub"
-    "attribute.actor"      = "assertion.actor"
-    "attribute.repository" = "assertion.repository"
-    "attribute.ref"        = "assertion.ref"
+    "google.subject"             = "assertion.sub"
+    "attribute.actor"            = "assertion.actor"
+    "attribute.repository"       = "assertion.repository"
+    "attribute.repository_owner" = "assertion.repository_owner"
+    "attribute.ref"              = "assertion.ref"
   }
 
-  attribute_condition = "attribute.repository == '${var.github_repository}' && attribute.ref == 'refs/heads/${var.github_branch}'"
+  attribute_condition = "attribute.repository_owner == '${split("/", var.github_repository)[0]}' && attribute.repository == '${var.github_repository}' && attribute.ref == 'refs/heads/${var.github_branch}'"
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
@@ -167,18 +144,49 @@ resource "google_service_account_iam_binding" "github_deploy_workload_identity_u
 resource "google_project_iam_member" "github_deploy_roles" {
   for_each = toset([
     "roles/artifactregistry.writer",
-    "roles/container.developer",
+    "roles/cloudsql.admin",
+    "roles/compute.networkAdmin",
+    "roles/container.admin",
+    "roles/iam.serviceAccountAdmin",
     "roles/iam.serviceAccountUser",
+    "roles/iam.workloadIdentityPoolAdmin",
+    "roles/resourcemanager.projectIamAdmin",
     "roles/secretmanager.admin",
     "roles/serviceusage.serviceUsageAdmin",
     "roles/storage.admin",
-    "roles/cloudsql.admin",
+    "roles/servicenetworking.networksAdmin",
     "roles/pubsub.admin"
   ])
 
   project = var.project_id
   role    = each.value
   member  = "serviceAccount:${google_service_account.github_deploy.email}"
+}
+
+resource "google_compute_network" "robur" {
+  name                    = "robur-vpc"
+  project                 = var.project_id
+  auto_create_subnetworks = false
+
+  depends_on = [google_project_service.enabled_services["compute.googleapis.com"]]
+}
+
+resource "google_compute_subnetwork" "gke" {
+  name          = "robur-gke"
+  project       = var.project_id
+  region        = var.region
+  network       = google_compute_network.robur.id
+  ip_cidr_range = "10.80.0.0/20"
+
+  secondary_ip_range {
+    range_name    = "robur-pods"
+    ip_cidr_range = "10.84.0.0/16"
+  }
+
+  secondary_ip_range {
+    range_name    = "robur-services"
+    ip_cidr_range = "10.85.0.0/20"
+  }
 }
 
 resource "google_container_cluster" "primary" {
@@ -189,6 +197,13 @@ resource "google_container_cluster" "primary" {
   initial_node_count       = 1
   remove_default_node_pool = true
   deletion_protection      = true
+  network                  = google_compute_network.robur.id
+  subnetwork               = google_compute_subnetwork.gke.id
+
+  ip_allocation_policy {
+    cluster_secondary_range_name  = "robur-pods"
+    services_secondary_range_name = "robur-services"
+  }
 
   workload_identity_config {
     workload_pool = "${var.project_id}.svc.id.goog"
@@ -198,7 +213,38 @@ resource "google_container_cluster" "primary" {
     channel = "REGULAR"
   }
 
+  secret_manager_config {
+    enabled = true
+  }
+
   depends_on = [google_project_service.enabled_services["container.googleapis.com"]]
+}
+
+resource "google_service_account" "gke_nodes" {
+  project      = var.project_id
+  account_id   = local.gke_nodes_sa_id
+  display_name = "Robur GKE node service account"
+}
+
+resource "google_project_iam_member" "gke_node_roles" {
+  for_each = toset([
+    "roles/autoscaling.metricsWriter",
+    "roles/logging.logWriter",
+    "roles/monitoring.metricWriter",
+    "roles/monitoring.viewer"
+  ])
+
+  project = var.project_id
+  role    = each.value
+  member  = "serviceAccount:${google_service_account.gke_nodes.email}"
+}
+
+resource "google_artifact_registry_repository_iam_member" "gke_nodes_pull_images" {
+  project    = var.project_id
+  location   = google_artifact_registry_repository.robur_app.location
+  repository = google_artifact_registry_repository.robur_app.name
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.gke_nodes.email}"
 }
 
 resource "google_container_node_pool" "primary" {
@@ -211,7 +257,8 @@ resource "google_container_node_pool" "primary" {
   node_config {
     machine_type    = "e2-small"
     preemptible     = true
-    service_account = google_service_account.github_deploy.email
+    service_account = google_service_account.gke_nodes.email
+    oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
 
     labels = {
       app = local.app_name
@@ -221,39 +268,60 @@ resource "google_container_node_pool" "primary" {
       mode = "GKE_METADATA"
     }
   }
+
+  depends_on = [
+    google_artifact_registry_repository_iam_member.gke_nodes_pull_images,
+    google_project_iam_member.gke_node_roles
+  ]
 }
 
-resource "google_service_account" "robur_sql_gsa" {
+resource "google_service_account" "robur_api" {
   project      = var.project_id
-  account_id   = "robur-sql-gsa"
-  display_name = "Robur Cloud SQL Workload Identity service account"
+  account_id   = local.api_sa_id
+  display_name = "Robur API workload identity service account"
 }
 
-resource "google_project_iam_member" "robur_sql_client" {
+resource "google_service_account" "robur_migrations" {
+  project      = var.project_id
+  account_id   = local.migrations_sa_id
+  display_name = "Robur migrations workload identity service account"
+}
+
+resource "google_project_iam_member" "robur_cloud_sql_clients" {
+  for_each = toset([
+    google_service_account.robur_api.email,
+    google_service_account.robur_migrations.email
+  ])
+
   project = var.project_id
   role    = "roles/cloudsql.client"
-  member  = "serviceAccount:${google_service_account.robur_sql_gsa.email}"
+  member  = "serviceAccount:${each.value}"
 }
 
 resource "google_pubsub_topic_iam_member" "api_fitness_publisher" {
   project = var.project_id
   topic   = google_pubsub_topic.fitness_events.name
   role    = "roles/pubsub.publisher"
-  member  = "serviceAccount:${google_service_account.robur_sql_gsa.email}"
+  member  = "serviceAccount:${google_service_account.robur_api.email}"
 }
 
-resource "google_service_account_iam_binding" "robur_workload_identity_users" {
-  service_account_id = google_service_account.robur_sql_gsa.name
+resource "google_secret_manager_secret_iam_member" "api_healthkit_token_accessor" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.healthkit_ingest_token.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.robur_api.email}"
+}
+
+resource "google_service_account_iam_member" "api_workload_identity_user" {
+  service_account_id = google_service_account.robur_api.name
   role               = "roles/iam.workloadIdentityUser"
-  members = [
-    "serviceAccount:${var.project_id}.svc.id.goog[${var.k8s_namespace}/api-sa]",
-    "serviceAccount:${var.project_id}.svc.id.goog[${var.k8s_namespace}/flyway-sa]"
-  ]
+  member             = "serviceAccount:${var.project_id}.svc.id.goog[${var.k8s_namespace}/api-sa]"
 }
 
-data "google_compute_network" "vpc" {
-  project = var.project_id
-  name    = "default"
+resource "google_service_account_iam_member" "migrations_workload_identity_user" {
+  service_account_id = google_service_account.robur_migrations.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.project_id}.svc.id.goog[${var.k8s_namespace}/flyway-sa]"
 }
 
 resource "google_compute_global_address" "sql_psa_range" {
@@ -262,11 +330,11 @@ resource "google_compute_global_address" "sql_psa_range" {
   purpose       = "VPC_PEERING"
   address_type  = "INTERNAL"
   prefix_length = 16
-  network       = data.google_compute_network.vpc.self_link
+  network       = google_compute_network.robur.self_link
 }
 
 resource "google_service_networking_connection" "vpc_connection" {
-  network                 = data.google_compute_network.vpc.self_link
+  network                 = google_compute_network.robur.self_link
   service                 = "servicenetworking.googleapis.com"
   reserved_peering_ranges = [google_compute_global_address.sql_psa_range.name]
 
@@ -300,7 +368,7 @@ resource "google_sql_database_instance" "pg" {
 
     ip_configuration {
       ipv4_enabled    = false
-      private_network = data.google_compute_network.vpc.self_link
+      private_network = google_compute_network.robur.self_link
       ssl_mode        = "ENCRYPTED_ONLY"
     }
   }

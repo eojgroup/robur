@@ -1,17 +1,13 @@
 name: Build and Deploy to GKE
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "apps/**"
-      - "packages/**"
-      - "infra/k8s/**"
-      - "infra/gcp/sql/**"
-      - "infra/scripts/wait-for-k8s-job.sh"
-      - ".github/workflows/gke-deploy.yml"
   workflow_dispatch:
+    inputs:
+      deploy_production:
+        description: "Build containers and deploy them to production GKE"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -24,6 +20,7 @@ concurrency:
 jobs:
   build:
     name: Build and push containers
+    if: inputs.deploy_production == true
     runs-on: ubuntu-latest
     environment: production
     env:
@@ -80,7 +77,7 @@ jobs:
       REGION: ${{ vars.GCP_REGION || 'europe-west2' }}
       CLUSTER: ${{ vars.GKE_CLUSTER || 'robur-cluster' }}
       K8S_NAMESPACE: robur
-      WEB_DOMAIN_NAME: ${{ vars.WEB_DOMAIN_NAME || 'app.robur.app' }}
+      WEB_DOMAIN_NAME: ${{ vars.WEB_DOMAIN_NAME || 'robur.fit' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -104,6 +101,7 @@ jobs:
         run: |
           kubectl apply -f infra/k8s/namespace.yaml
           sed "s/PROJECT_ID/${PROJECT_ID}/g" infra/k8s/config/serviceaccounts.yaml | kubectl apply -f -
+          sed "s/PROJECT_ID/${PROJECT_ID}/g" infra/k8s/config/healthkit-secret-provider.yaml | kubectl apply -f -
           kubectl -n "${K8S_NAMESPACE}" apply -f infra/k8s/config/robur-config.yaml
 
       - name: Apply SQL migrations config
@@ -121,12 +119,12 @@ jobs:
       - name: Apply app workloads
         run: |
           for file in infra/k8s/api-deployment.yaml infra/k8s/web-deployment.yaml; do
-            sed "s/PROJECT_ID/${PROJECT_ID}/g; s/app.robur.app/${WEB_DOMAIN_NAME}/g" "$file" | kubectl apply -f -
+            sed "s/PROJECT_ID/${PROJECT_ID}/g" "$file" | kubectl apply -f -
           done
           kubectl apply -f infra/k8s/api-service.yaml
           kubectl apply -f infra/k8s/web-service.yaml
-          sed "s/app.robur.app/${WEB_DOMAIN_NAME}/g" infra/k8s/managed-certificate.yaml | kubectl apply -f -
-          sed "s/app.robur.app/${WEB_DOMAIN_NAME}/g" infra/k8s/ingress.yaml | kubectl apply -f -
+          sed "s/WEB_DOMAIN_NAME/${WEB_DOMAIN_NAME}/g" infra/k8s/managed-certificate.yaml | kubectl apply -f -
+          sed "s/WEB_DOMAIN_NAME/${WEB_DOMAIN_NAME}/g" infra/k8s/ingress.yaml | kubectl apply -f -
 
       - name: Restart deployments onto new images
         run: |

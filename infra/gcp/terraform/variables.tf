@@ -40,7 +40,7 @@ variable "k8s_namespace" {
 }
 
 variable "domain_name" {
-  description = "Public web domain, such as app.robur.app."
+  description = "Public web domain, such as robur.fit."
   type        = string
   default     = ""
 }
@@ -49,11 +49,4 @@ variable "cloud_sql_tier" {
   description = "Cloud SQL tier for the Robur Postgres instance."
   type        = string
   default     = "db-custom-1-3840"
-}
-
-variable "healthkit_ingest_token" {
-  description = "Shared token accepted by the API for HealthKit sync during the initial shell phase."
-  type        = string
-  default     = ""
-  sensitive   = true
 }

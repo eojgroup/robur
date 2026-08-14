@@ -1,27 +1,22 @@
 import SwiftUI
-import UIKit
 
 @main
 struct RoburApp: App {
-  @UIApplicationDelegateAdaptor(RoburAppDelegate.self) private var appDelegate
   @StateObject private var healthKit = HealthKitClient()
-  @StateObject private var pushNotifications = PushNotificationClient.shared
 
   var body: some Scene {
     WindowGroup {
       RoburTodayView()
         .environmentObject(healthKit)
-        .environmentObject(pushNotifications)
     }
   }
 }
 
 struct RoburTodayView: View {
   @EnvironmentObject private var healthKit: HealthKitClient
-  @EnvironmentObject private var pushNotifications: PushNotificationClient
 
   private var snapshot: FitnessSnapshot {
-    healthKit.snapshot ?? RoburData.today
+    healthKit.snapshot ?? RoburData.noHealthData
   }
 
   var body: some View {
@@ -44,15 +39,20 @@ struct RoburTodayView: View {
       .navigationTitle(RoburData.appName)
       .toolbar {
         Button {
-          healthKit.requestAuthorization()
+          if healthKit.authorizationRequested {
+            Task {
+              await healthKit.refreshTodaySnapshot()
+            }
+          } else {
+            healthKit.requestAuthorization()
+          }
         } label: {
           Image(systemName: "heart.text.square")
         }
-        .accessibilityLabel("Connect Apple Health")
+        .accessibilityLabel(healthKit.authorizationRequested ? "Refresh Apple Health" : "Connect Apple Health")
       }
       .task {
         await healthKit.refreshTodaySnapshot()
-        pushNotifications.refreshAuthorizationStatus()
       }
     }
   }
@@ -84,21 +84,6 @@ struct RoburTodayView: View {
           healthKit.requestAuthorization()
         }
       }
-
-      PermissionCard(
-        systemImage: "bell.badge.fill",
-        title: pushNotifications.promptTitle,
-        message: pushNotifications.promptMessage,
-        buttonTitle: pushNotifications.authorizationStatus == .denied ? "Open Settings" : "Enable",
-        tint: .blue
-      ) {
-        if pushNotifications.authorizationStatus == .denied,
-           let url = URL(string: UIApplication.openSettingsURLString) {
-          UIApplication.shared.open(url)
-        } else {
-          pushNotifications.requestAuthorization()
-        }
-      }
     }
   }
 
@@ -111,9 +96,9 @@ struct RoburTodayView: View {
 
   private var vitals: some View {
     VStack(spacing: 12) {
-      DataRow(title: "Sleep", value: RoburData.duration(snapshot.sleepMinutes))
-      DataRow(title: "Resting HR", value: "\(snapshot.restingHeartRateBpm) bpm")
-      DataRow(title: "HRV", value: "\(snapshot.heartRateVariabilityMs) ms")
+      DataRow(title: "Sleep", value: durationValue(snapshot.sleepMinutes))
+      DataRow(title: "Resting HR", value: metricValue(snapshot.restingHeartRateBpm, unit: "bpm"))
+      DataRow(title: "HRV", value: metricValue(snapshot.heartRateVariabilityMs, unit: "ms"))
     }
   }
 
@@ -144,6 +129,14 @@ struct RoburTodayView: View {
       DataRow(title: "Strength", value: "\(snapshot.week.strengthSessions) sessions")
       DataRow(title: "Training", value: RoburData.duration(snapshot.week.trainingMinutes))
     }
+  }
+
+  private func durationValue(_ minutes: Int) -> String {
+    minutes > 0 ? RoburData.duration(minutes) : "—"
+  }
+
+  private func metricValue(_ value: Int, unit: String) -> String {
+    value > 0 ? "\(value) \(unit)" : "—"
   }
 }
 

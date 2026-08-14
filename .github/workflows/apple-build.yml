@@ -11,6 +11,12 @@ on:
       - "apps/mobile/ios/**"
       - ".github/workflows/apple-build.yml"
   workflow_dispatch:
+    inputs:
+      distribute_to_testflight:
+        description: "Archive and upload a successful build to TestFlight"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -59,9 +65,27 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
+      - name: Test Health snapshot mapping
+        working-directory: apps/mobile/ios
+        run: |
+          simulator_id="$(xcrun simctl list devices available -j | ruby -rjson -e '
+            devices = JSON.parse(STDIN.read).fetch("devices").values.flatten
+            simulator = devices.find { |device| device["isAvailable"] && device["name"].start_with?("iPhone") }
+            abort("No available iPhone simulator found") unless simulator
+            print simulator.fetch("udid")
+          ')"
+          xcodebuild \
+            -project Robur.xcodeproj \
+            -scheme Robur \
+            -configuration Debug \
+            -destination "id=${simulator_id}" \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:RoburTests \
+            test
+
   testflight:
     name: Archive and distribute to TestFlight
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.distribute_to_testflight == true
     needs: build
     runs-on: macos-latest
     environment: production

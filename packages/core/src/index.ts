@@ -77,7 +77,7 @@ export const roburApp = {
   slug: "robur",
   bundleIdentifier: "com.eojgroup.robur",
   watchBundleIdentifier: "com.eojgroup.robur.watchkitapp",
-  supportEmail: "support@robur.app"
+  supportEmail: "support@robur.fit"
 } as const;
 
 export const todaySnapshot: TodaySnapshot = {

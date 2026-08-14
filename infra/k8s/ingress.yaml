@@ -8,7 +8,7 @@ metadata:
     networking.gke.io/managed-certificates: robur-web-cert
 spec:
   rules:
-    - host: app.robur.app
+    - host: WEB_DOMAIN_NAME
       http:
         paths:
           - path: /api
