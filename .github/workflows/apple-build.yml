@@ -1,0 +1,100 @@
+name: Build Apple clients
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/mobile/ios/**"
+      - ".github/workflows/apple-build.yml"
+  pull_request:
+    paths:
+      - "apps/mobile/ios/**"
+      - ".github/workflows/apple-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Compile iPhone, iPad, and Watch
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        working-directory: apps/mobile/ios
+        run: ruby generate_xcodeproj.rb
+
+      - name: Validate generated project contracts
+        working-directory: apps/mobile/ios
+        run: ruby validate_xcodeproj.rb
+
+      - name: Compile universal iOS and iPadOS application
+        working-directory: apps/mobile/ios
+        run: |
+          xcodebuild \
+            -project Robur.xcodeproj \
+            -scheme Robur \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Compile watchOS application
+        working-directory: apps/mobile/ios
+        run: |
+          xcodebuild \
+            -project Robur.xcodeproj \
+            -target 'RoburWatch Watch App' \
+            -configuration Debug \
+            -sdk watchsimulator \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+  testflight:
+    name: Archive and distribute to TestFlight
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: macos-latest
+    environment: production
+    env:
+      APP_BUNDLE_ID: com.eojgroup.robur
+      TESTFLIGHT_GROUP_NAME: Robur Test Group
+      DEVELOPMENT_TEAM: ${{ vars.APPLE_TEAM_ID }}
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+      MATCH_GIT_URL: ${{ vars.MATCH_GIT_URL }}
+      MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: apps/mobile/ios
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Check signing credentials
+        run: |
+          test -n "${APP_STORE_CONNECT_API_KEY_ID}"
+          test -n "${APP_STORE_CONNECT_API_ISSUER_ID}"
+          test -n "${APP_STORE_CONNECT_API_KEY}"
+          test -n "${MATCH_GIT_URL}"
+          test -n "${MATCH_PASSWORD}"
+
+      - name: Upload to TestFlight
+        working-directory: apps/mobile/ios
+        run: bundle exec fastlane ios beta

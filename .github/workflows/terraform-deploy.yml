@@ -1,0 +1,126 @@
+name: Terraform Infrastructure Deployment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/gcp/terraform/**"
+      - "infra/scripts/terraform-init-retry.sh"
+      - ".github/workflows/terraform-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: robur-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Terraform + Cloud SQL + GKE
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION || 'europe-west2' }}
+      ZONE: ${{ vars.GCP_ZONE || 'europe-west2-b' }}
+      K8S_NAMESPACE: robur
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+      TF_VAR_region: ${{ vars.GCP_REGION || 'europe-west2' }}
+      TF_VAR_zone: ${{ vars.GCP_ZONE || 'europe-west2-b' }}
+      TF_VAR_domain_name: ${{ vars.WEB_DOMAIN_NAME || 'app.robur.app' }}
+      TF_VAR_github_repository: ${{ github.repository }}
+      TF_VAR_healthkit_ingest_token: ${{ secrets.HEALTHKIT_INGEST_TOKEN || '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+          terraform_wrapper: false
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_TERRAFORM_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          install_components: gke-gcloud-auth-plugin
+
+      - name: Terraform init
+        run: ./infra/scripts/terraform-init-retry.sh infra/gcp/terraform
+
+      - name: Terraform formatting and validation
+        working-directory: infra/gcp/terraform
+        run: |
+          terraform fmt -check -recursive
+          terraform validate
+
+      - name: Terraform plan
+        working-directory: infra/gcp/terraform
+        run: terraform plan -lock-timeout=5m -out=tfplan
+
+      - name: Terraform apply
+        working-directory: infra/gcp/terraform
+        run: terraform apply -auto-approve -lock-timeout=5m tfplan
+
+      - name: Capture Terraform outputs
+        id: tf_out
+        working-directory: infra/gcp/terraform
+        run: |
+          {
+            echo "instance_connection_name=$(terraform output -raw instance_connection_name)"
+            echo "private_ip_address=$(terraform output -raw private_ip_address)"
+            echo "db_name=$(terraform output -raw db_name)"
+            echo "db_user=$(terraform output -raw db_user)"
+            echo "db_pass=$(terraform output -raw db_pass)"
+            echo "robur_sql_gsa_email=$(terraform output -raw robur_sql_gsa_email)"
+            echo "gke_cluster_name=$(terraform output -raw gke_cluster_name)"
+            echo "workload_identity_provider=$(terraform output -raw workload_identity_provider)"
+            echo "github_deploy_service_account=$(terraform output -raw github_deploy_service_account)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mask DB secret
+        run: echo "::add-mask::${{ steps.tf_out.outputs.db_pass }}"
+
+      - name: Get GKE credentials
+        run: gcloud container clusters get-credentials "${{ steps.tf_out.outputs.gke_cluster_name }}" --region "${REGION}" --project "${PROJECT_ID}"
+
+      - name: Ensure namespace and service accounts
+        run: |
+          kubectl apply -f infra/k8s/namespace.yaml
+          sed "s/PROJECT_ID/${PROJECT_ID}/g" infra/k8s/config/serviceaccounts.yaml | kubectl apply -f -
+
+      - name: Upsert runtime configuration
+        run: |
+          kubectl -n "${K8S_NAMESPACE}" apply -f infra/k8s/config/robur-config.yaml
+          kubectl -n "${K8S_NAMESPACE}" patch configmap robur-config --type merge -p "{\"data\":{\"INSTANCE_CONNECTION_NAME\":\"${{ steps.tf_out.outputs.instance_connection_name }}\",\"CORS_ORIGIN\":\"https://${{ vars.WEB_DOMAIN_NAME || 'app.robur.app' }}\"}}"
+
+      - name: Upsert database and HealthKit secrets
+        env:
+          DB_NAME: ${{ steps.tf_out.outputs.db_name }}
+          DB_USER: ${{ steps.tf_out.outputs.db_user }}
+          DB_PASS: ${{ steps.tf_out.outputs.db_pass }}
+          DB_PRIVATE_IP: ${{ steps.tf_out.outputs.private_ip_address }}
+          HEALTHKIT_INGEST_TOKEN: ${{ secrets.HEALTHKIT_INGEST_TOKEN || '' }}
+        run: |
+          kubectl -n "${K8S_NAMESPACE}" create secret generic robur-db \
+            --from-literal=DB_USER="${DB_USER}" \
+            --from-literal=DB_PASSWORD="${DB_PASS}" \
+            --from-literal=DATABASE_URL="postgres://${DB_USER}:${DB_PASS}@127.0.0.1:5432/${DB_NAME}" \
+            --from-literal=FLYWAY_URL="jdbc:postgresql://${DB_PRIVATE_IP}:5432/${DB_NAME}?sslmode=require" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          if [ -n "${HEALTHKIT_INGEST_TOKEN}" ]; then
+            kubectl -n "${K8S_NAMESPACE}" create secret generic robur-healthkit \
+              --from-literal=HEALTHKIT_INGEST_TOKEN="${HEALTHKIT_INGEST_TOKEN}" \
+              --dry-run=client -o yaml | kubectl apply -f -
+          fi

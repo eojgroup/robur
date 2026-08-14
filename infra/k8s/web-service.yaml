@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: robur-web
+  namespace: robur
+spec:
+  selector: { app: robur-web }
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

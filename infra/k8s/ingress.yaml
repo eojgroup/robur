@@ -1,0 +1,27 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: robur
+  namespace: robur
+  annotations:
+    kubernetes.io/ingress.class: gce
+    networking.gke.io/managed-certificates: robur-web-cert
+spec:
+  rules:
+    - host: app.robur.app
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: robur-api
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: robur-web
+                port:
+                  number: 80

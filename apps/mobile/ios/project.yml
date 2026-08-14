@@ -1,0 +1,70 @@
+name: Robur
+options:
+  minimumXcodeGenVersion: 2.42.0
+  bundleIdPrefix: com.eojgroup
+settings:
+  base:
+    MARKETING_VERSION: ${MARKETING_VERSION}
+    CURRENT_PROJECT_VERSION: ${BUILD_NUMBER}
+    SWIFT_VERSION: 5.10
+    DEVELOPMENT_TEAM: ${APPLE_TEAM_ID}
+    CODE_SIGN_STYLE: Manual
+    CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED: YES
+targets:
+  Robur:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Sources/RoburApp
+      - path: Sources/RoburShared
+      - path: Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.eojgroup.robur
+        PRODUCT_NAME: Robur
+        INFOPLIST_FILE: Sources/RoburApp/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/RoburApp/Robur.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+      configs:
+        Debug:
+          APNS_ENVIRONMENT: development
+        Release:
+          APNS_ENVIRONMENT: production
+    dependencies:
+      - sdk: HealthKit.framework
+      - target: RoburWatch Watch App
+        embed: true
+  RoburWatch Watch App:
+    type: application.watchapp2
+    platform: watchOS
+    deploymentTarget: "10.0"
+    sources:
+      - path: Sources/RoburWatchApp
+      - path: Sources/RoburShared
+      - path: Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.eojgroup.robur.watchkitapp
+        PRODUCT_NAME: Robur Watch
+        INFOPLIST_FILE: Sources/RoburWatchApp/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/RoburWatchApp/RoburWatch.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        Debug:
+          APNS_ENVIRONMENT: development
+        Release:
+          APNS_ENVIRONMENT: production
+    dependencies:
+      - sdk: HealthKit.framework
+schemes:
+  Robur:
+    build:
+      targets:
+        Robur: all
+        RoburWatch Watch App: all
+    run:
+      config: Debug
+    archive:
+      config: Release

@@ -1,0 +1,8 @@
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: robur-web-cert
+  namespace: robur
+spec:
+  domains:
+    - app.robur.app

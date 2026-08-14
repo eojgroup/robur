@@ -1,0 +1,24 @@
+{
+  "name": "robur",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.32.1",
+  "type": "module",
+  "scripts": {
+    "dev:api": "pnpm --filter @robur/api dev",
+    "dev:web": "pnpm --filter @robur/web dev",
+    "build": "pnpm -r --if-present build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "apple:generate": "cd apps/mobile/ios && ruby generate_xcodeproj.rb",
+    "apple:beta": "cd apps/mobile/ios && bundle exec fastlane ios beta",
+    "infra:fmt": "terraform -chdir=infra/gcp/terraform fmt -recursive",
+    "infra:validate": "terraform -chdir=infra/gcp/terraform validate",
+    "generate:icons": "node scripts/generate-icons.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.2.1",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

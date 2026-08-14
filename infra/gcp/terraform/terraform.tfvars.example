@@ -1,0 +1,13 @@
+project_id  = "robur-000000"
+region      = "europe-west2"
+zone        = "europe-west2-b"
+environment = "prod"
+
+github_repository = "eojgroup/robur"
+github_branch     = "main"
+k8s_namespace     = "robur"
+
+domain_name = "app.robur.app"
+
+# Generate once and store as a GitHub secret too.
+healthkit_ingest_token = "replace-with-admin-generated-token"

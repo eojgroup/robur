@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: robur-flyway
+  namespace: robur
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: flyway-sa
+      containers:
+        - name: flyway
+          image: flyway/flyway:10-alpine
+          args: ["migrate"]
+          env:
+            - name: FLYWAY_URL
+              valueFrom: { secretKeyRef: { name: robur-db, key: FLYWAY_URL } }
+            - name: FLYWAY_USER
+              valueFrom: { secretKeyRef: { name: robur-db, key: DB_USER } }
+            - name: FLYWAY_PASSWORD
+              valueFrom: { secretKeyRef: { name: robur-db, key: DB_PASSWORD } }
+          volumeMounts:
+            - name: sql
+              mountPath: /flyway/sql
+      volumes:
+        - name: sql
+          configMap:
+            name: robur-sql-migrations

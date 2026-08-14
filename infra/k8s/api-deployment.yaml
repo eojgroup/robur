@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: robur-api
+  namespace: robur
+  labels: { app: robur-api }
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  progressDeadlineSeconds: 600
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app: robur-api }
+  template:
+    metadata:
+      labels: { app: robur-api }
+    spec:
+      serviceAccountName: api-sa
+      containers:
+        - name: robur-api
+          image: europe-west2-docker.pkg.dev/PROJECT_ID/robur-app/robur-api:latest
+          imagePullPolicy: Always
+          ports: [ { containerPort: 8080 } ]
+          envFrom:
+            - configMapRef: { name: robur-config }
+          env:
+            - name: INSTANCE_CONNECTION_NAME
+              valueFrom: { configMapKeyRef: { name: robur-config, key: INSTANCE_CONNECTION_NAME } }
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: robur-db, key: DATABASE_URL } }
+            - name: HEALTHKIT_INGEST_TOKEN
+              valueFrom: { secretKeyRef: { name: robur-healthkit, key: HEALTHKIT_INGEST_TOKEN, optional: true } }
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 2
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.15.2
+          args:
+            - "--private-ip"
+            - "--structured-logs"
+            - "--port=5432"
+            - "$(INSTANCE_CONNECTION_NAME)"
+          env:
+            - name: INSTANCE_CONNECTION_NAME
+              valueFrom: { configMapKeyRef: { name: robur-config, key: INSTANCE_CONNECTION_NAME } }
+          securityContext:
+            runAsNonRoot: true
+          resources:
+            requests: { cpu: "25m", memory: "64Mi" }
+            limits: { cpu: "100m", memory: "128Mi" }

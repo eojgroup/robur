@@ -1,0 +1,116 @@
+name: Robur CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    name: Web, API, and core
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  terraform:
+    name: Terraform validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      - name: Init without backend
+        working-directory: infra/gcp/terraform
+        run: terraform init -backend=false
+
+      - name: Format check
+        working-directory: infra/gcp/terraform
+        run: terraform fmt -check -recursive
+
+      - name: Validate
+        working-directory: infra/gcp/terraform
+        run: terraform validate
+
+  k8s:
+    name: Kubernetes manifests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check shell scripts
+        run: bash -n infra/scripts/terraform-init-retry.sh infra/scripts/wait-for-k8s-job.sh
+
+      - name: Check placeholders stay explicit
+        run: |
+          test "$(grep -RIl 'PROJECT_ID' infra/k8s | wc -l)" -ge 1
+
+  apple:
+    name: Apple project compile
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: apps/mobile/ios
+        run: ruby generate_xcodeproj.rb
+
+      - name: Validate generated project contracts
+        working-directory: apps/mobile/ios
+        run: ruby validate_xcodeproj.rb
+
+      - name: Compile universal iOS and iPadOS application
+        working-directory: apps/mobile/ios
+        run: |
+          xcodebuild \
+            -project Robur.xcodeproj \
+            -scheme Robur \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Compile watchOS application
+        working-directory: apps/mobile/ios
+        run: |
+          xcodebuild \
+            -project Robur.xcodeproj \
+            -target 'RoburWatch Watch App' \
+            -configuration Debug \
+            -sdk watchsimulator \
+            CODE_SIGNING_ALLOWED=NO \
+            build

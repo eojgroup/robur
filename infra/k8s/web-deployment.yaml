@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: robur-web
+  namespace: robur
+  labels: { app: robur-web }
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  progressDeadlineSeconds: 600
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app: robur-web }
+  template:
+    metadata:
+      labels: { app: robur-web }
+    spec:
+      containers:
+        - name: robur-web
+          image: europe-west2-docker.pkg.dev/PROJECT_ID/robur-app/robur-web:latest
+          imagePullPolicy: Always
+          ports: [ { containerPort: 80 } ]
+          readinessProbe:
+            httpGet: { path: /readyz, port: 80 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: 80 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 2
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits: { cpu: "200m", memory: "256Mi" }

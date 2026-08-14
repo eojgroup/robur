@@ -1,0 +1,212 @@
+:root {
+  color-scheme: light;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #172124;
+  background: #edf2ed;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --ink: #172124;
+  --muted: #63706d;
+  --line: #d8e0d9;
+  --panel: #ffffff;
+  --green: #2fbf84;
+  --coral: #ff6f61;
+  --blue: #3f7cac;
+  --dark: #132525;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button {
+  font: inherit;
+}
+
+.appShell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 28px;
+  background:
+    linear-gradient(90deg, rgb(237 242 237 / 98%), rgb(237 242 237 / 84%)),
+    url("/images/robur-training-session.png") center / cover;
+}
+
+.todayPanel {
+  width: min(100%, 460px);
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 94%);
+  box-shadow: 0 24px 70px rgb(24 36 32 / 20%);
+}
+
+.appHeader,
+.metricLine,
+.dataRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.appName,
+.sectionLabel {
+  margin: 0 0 6px;
+  color: var(--green);
+  font-size: 0.75rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 0;
+  color: var(--dark);
+  font-size: 2.25rem;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+h2 {
+  margin-bottom: 4px;
+  font-size: 1.55rem;
+}
+
+.iconButton {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--dark);
+  background: #f7faf7;
+  cursor: pointer;
+}
+
+.iconButton:hover {
+  border-color: #9bd7bd;
+  color: #0b744d;
+}
+
+.divider {
+  height: 1px;
+  margin: 22px 0;
+  background: var(--line);
+}
+
+.scoreStack {
+  display: grid;
+  gap: 18px;
+}
+
+.scoreRow {
+  display: grid;
+  gap: 8px;
+}
+
+.metricLine span,
+.dataRow span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.metricLine strong,
+.dataRow strong {
+  color: var(--ink);
+  font-size: 1.05rem;
+}
+
+.barTrack {
+  height: 12px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #e2e8e3;
+}
+
+.barTrack span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--green), #7be0b3);
+}
+
+.vitalsGrid,
+.week {
+  display: grid;
+  gap: 12px;
+}
+
+.dataRow {
+  min-height: 34px;
+}
+
+.rowIcon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  border-radius: 8px;
+  color: #0e704c;
+  background: #eaf8f1;
+}
+
+.dataRow span:nth-child(2) {
+  margin-right: auto;
+}
+
+.recommendation {
+  display: grid;
+  gap: 6px;
+}
+
+.prescription {
+  margin-bottom: 8px;
+  color: var(--dark);
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.rationale {
+  max-width: 31ch;
+  margin-bottom: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.weekRow .rowIcon {
+  color: #244f73;
+  background: #e9f2f8;
+}
+
+@media (max-width: 560px) {
+  .appShell {
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .todayPanel {
+    width: 100%;
+    padding: 20px;
+  }
+
+  h1 {
+    font-size: 1.9rem;
+  }
+}
