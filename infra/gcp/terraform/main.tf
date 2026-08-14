@@ -257,7 +257,7 @@ resource "google_container_node_pool" "primary" {
   node_count     = 1
 
   node_config {
-    machine_type    = "e2-small"
+    machine_type    = var.gke_machine_type
     preemptible     = true
     service_account = google_service_account.gke_nodes.email
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]

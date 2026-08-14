@@ -93,6 +93,7 @@ github_branch     = "main"
 k8s_namespace     = "robur"
 domain_name       = "robur.fit"
 cloud_sql_tier    = "db-custom-1-3840"
+gke_machine_type  = "e2-custom-2-4096"
 ```
 
 The only unavoidable local bootstrap is the keyless GitHub identity: a workflow
@@ -212,8 +213,9 @@ than assuming the previous address remains valid.
 
 The low-cost design choices are deliberate:
 
-- the regional GKE control plane has a single `e2-small` preemptible node in
-  `europe-west2-b`, rather than a three-zone workload node pool;
+- the regional GKE control plane has a single preemptible custom E2 node with
+  two vCPUs and 4 GB (`e2-custom-2-4096`) in `europe-west2-b`, rather than a
+  three-zone workload node pool;
 - API and web deployments each start with one small replica;
 - Artifact Registry retains five recent images and deletes images older than
   14 days; and

@@ -47,10 +47,12 @@ Registry, and a GKE Ingress/external Application Load Balancer after the first
 application deployment. Cloud SQL does not scale to zero.
 
 To hold the evaluation footprint down, the regional cluster has exactly one
-workload node in `europe-west2-b`: a preemptible `e2-small`. This avoids a
-three-zone node multiplier while retaining a regional control plane. It also
-means a node preemption or that zone's outage can make the web/API temporarily
-unavailable. Do not describe this configuration as HA.
+workload node in `europe-west2-b`: a preemptible custom E2 VM with two vCPUs
+and 4 GB of memory (`e2-custom-2-4096`). This is the smallest practical shape
+for the GKE system pods plus Robur's web/API requests, and avoids a three-zone
+node multiplier while retaining a regional control plane. A node preemption or
+that zone's outage can make the web/API temporarily unavailable. Do not
+describe this configuration as HA.
 
 Artifact Registry removes images older than 14 days while retaining the five
 most recent versions; Pub/Sub retains messages for one day. These guardrails

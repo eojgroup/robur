@@ -163,10 +163,10 @@ jobs:
           access_token_lifetime: 3600s
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Authenticate Docker to Artifact Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: oauth2accesstoken
@@ -274,13 +274,11 @@ jobs:
         run: |
           set -euo pipefail
           for file in infra/k8s/api-deployment.yaml infra/k8s/web-deployment.yaml; do
-            sed "s/PROJECT_ID/${PROJECT_ID}/g" "$file" | kubectl apply -f -
+            sed \
+              -e "s/PROJECT_ID/${PROJECT_ID}/g" \
+              -e "s/:latest/:${GITHUB_SHA}/g" \
+              "$file" | kubectl apply -f -
           done
-          kubectl -n "$K8S_NAMESPACE" set image deployment/robur-api \
-            robur-api="${REGISTRY}/${PROJECT_ID}/${REPOSITORY}/robur-api:${GITHUB_SHA}"
-          kubectl -n "$K8S_NAMESPACE" set image deployment/robur-web \
-            robur-web="${REGISTRY}/${PROJECT_ID}/${REPOSITORY}/robur-web:${GITHUB_SHA}"
-          kubectl -n "$K8S_NAMESPACE" rollout restart deployment/robur-api deployment/robur-web
 
       - name: Verify rollouts
         shell: bash

@@ -15,6 +15,12 @@ variable "zone" {
   default     = "europe-west2-b"
 }
 
+variable "gke_machine_type" {
+  description = "Cost-bounded full-CPU node that leaves enough allocatable CPU and memory for GKE system pods plus the Robur web/API evaluation workloads."
+  type        = string
+  default     = "e2-custom-2-4096"
+}
+
 variable "environment" {
   description = "Deployment environment."
   type        = string

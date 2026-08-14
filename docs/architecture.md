@@ -64,9 +64,10 @@ recovery and deletes archived state versions after 90 days.
 
 The GKE cluster control plane is regional (`europe-west2`), but its sole node
 pool is pinned to one zone (`europe-west2-b`) and contains one preemptible
-`e2-small` node. That is the important cost boundary: a normal regional node
-pool would create workload capacity across three zones. A one-zone Spot/
-preemptible pool is cheaper but can be interrupted and is not highly available.
+custom E2 node with two vCPUs and 4 GB of memory (`e2-custom-2-4096`). That is
+the important cost boundary: a normal regional node pool would create workload
+capacity across three zones. A one-zone Spot/preemptible pool is cheaper but
+can be interrupted and is not highly available.
 
 Cloud SQL is `db-custom-1-3840`, zonal, private-IP only, encrypted in transit,
 backed up with point-in-time recovery, and configured `ALWAYS` on. It is a
