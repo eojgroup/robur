@@ -101,10 +101,10 @@ if [[ "$hosting_url" != https://*.web.app ]]; then
   exit 1
 fi
 
-# Create or update the environment without selecting reviewers. Reviewer choice is an
-# organization approval decision. Restricting deployment branches is safe and deterministic.
+# Create or update only the branch rule. Reviewer and self-review policy are an
+# organization approval decision; GitHub rejects self-review protection without a reviewer.
 gh api --method PUT "repos/$repository/environments/production" --input - >/dev/null <<'JSON'
-{"prevent_self_review":true,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
+{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
 JSON
 
 existing_policy_names="$(gh api "repos/$repository/environments/production/deployment-branch-policies" --paginate --jq '.[].name' || true)"
