@@ -139,7 +139,7 @@ jobs:
         run: |
           set -euo pipefail
           kubectl -n "$K8S_NAMESPACE" apply -f infra/k8s/config/robur-config.yaml
-          patch="$(node -e 'process.stdout.write(JSON.stringify({data:{INSTANCE_CONNECTION_NAME:process.env.INSTANCE_CONNECTION_NAME,CORS_ORIGIN:`https://${process.env.WEB_DOMAIN_NAME}`}}))')"
+          patch="$(node -e 'process.stdout.write(JSON.stringify({data:{INSTANCE_CONNECTION_NAME:process.env.INSTANCE_CONNECTION_NAME,CORS_ORIGIN:"https://"+process.env.WEB_DOMAIN_NAME}}))')"
           kubectl -n "$K8S_NAMESPACE" patch configmap robur-config --type merge -p "$patch"
         env:
           INSTANCE_CONNECTION_NAME: ${{ steps.tf_out.outputs.instance_connection_name }}
