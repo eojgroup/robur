@@ -322,12 +322,16 @@ resource "google_service_account_iam_member" "api_workload_identity_user" {
   service_account_id = google_service_account.robur_api.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.project_id}.svc.id.goog[${var.k8s_namespace}/api-sa]"
+
+  depends_on = [google_container_cluster.primary]
 }
 
 resource "google_service_account_iam_member" "migrations_workload_identity_user" {
   service_account_id = google_service_account.robur_migrations.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.project_id}.svc.id.goog[${var.k8s_namespace}/flyway-sa]"
+
+  depends_on = [google_container_cluster.primary]
 }
 
 resource "google_compute_global_address" "sql_psa_range" {
