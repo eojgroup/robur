@@ -95,6 +95,13 @@ resource "google_service_account" "github_deploy" {
   account_id   = local.deploy_sa_id
   display_name = "Robur static web deployer"
   description  = "Can publish only Firebase Hosting releases through GitHub OIDC."
+
+  # Service Usage reports API enablement before IAM is always ready to accept a
+  # service-account creation. Ordering the resources avoids most first-apply races.
+  depends_on = [
+    google_project_service.enabled_services["iam.googleapis.com"],
+    google_project_service.enabled_services["iamcredentials.googleapis.com"]
+  ]
 }
 
 resource "google_service_account_iam_member" "github_deploy_workload_identity_user" {
