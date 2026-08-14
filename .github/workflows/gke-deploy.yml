@@ -305,6 +305,8 @@ jobs:
           done
           if [[ -z "$ingress_ip" ]]; then
             echo "::warning::Ingress IP is not allocated yet. Recheck: kubectl -n $K8S_NAMESPACE get ingress robur"
+            kubectl -n "$K8S_NAMESPACE" describe ingress robur || true
+            kubectl -n "$K8S_NAMESPACE" get managedcertificate robur-web-cert -o wide || true
             exit 0
           fi
           {
