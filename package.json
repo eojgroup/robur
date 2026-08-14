@@ -8,7 +8,7 @@
     "dev:api": "pnpm --filter @robur/api dev",
     "dev:web": "pnpm --filter @robur/web dev",
     "build": "pnpm -r --if-present build",
-    "typecheck": "pnpm -r --if-present typecheck",
+    "typecheck": "pnpm --filter @robur/core build && pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
     "apple:generate": "cd apps/mobile/ios && ruby generate_xcodeproj.rb",
     "apple:beta": "cd apps/mobile/ios && bundle exec fastlane ios beta",

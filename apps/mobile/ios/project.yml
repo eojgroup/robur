@@ -35,7 +35,9 @@ targets:
       - target: RoburWatch Watch App
         embed: true
   RoburWatch Watch App:
-    type: application.watchapp2
+    # A single-target SwiftUI watchOS app. `application.watchapp2` is for the
+    # legacy app/extension layout and produces duplicate executable tasks.
+    type: application
     platform: watchOS
     deploymentTarget: "10.0"
     sources:
