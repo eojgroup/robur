@@ -32,9 +32,19 @@ struct RoburTodayView: View {
           recommendation
           Divider()
           week
+          Divider()
+          VStack(alignment: .leading, spacing: 8) {
+            Text("Your privacy")
+              .font(.headline)
+            Text("Your Health data stays on this device. Robur does not upload it, track you, or require an account. Manage access in Apple Health under your profile, Apps and Services, Robur.")
+            Text("Recovery and training load are general fitness estimates, not medical advice. Adjust activity to how you feel.")
+          }
+          .font(.footnote)
+          .foregroundStyle(.secondary)
         }
         .padding()
       }
+      .refreshable { await healthKit.refreshTodaySnapshot() }
       .background(Color(red: 0.95, green: 0.97, blue: 0.95))
       .navigationTitle(RoburData.appName)
       .toolbar {

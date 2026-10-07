@@ -6,6 +6,11 @@ their current HealthKit reads on the device; the web dashboard continues to use
 the shared demo snapshot until a separately approved, consented sync feature is
 introduced.
 
+Apple/TestFlight is the active release path. Google Cloud deployments are
+paused behind `GCP_DEPLOYMENTS_ENABLED` and an explicit manual dispatch.
+See [Apple release setup](docs/apple-testflight-release.md) for the remaining
+account tasks. Existing GCP resources are not deleted by this pause.
+
 The deployable web stack is GKE and Cloud SQL in GCP project `robur-505508`
 (`europe-west2`). It is intentionally a low-volume evaluation environment,
 not a highly available production topology.
@@ -67,9 +72,9 @@ There are exactly three workflow files:
 
 | Workflow | Normal behavior | Cost-bearing action |
 | --- | --- | --- |
-| `apple-build.yml` | Compiles iPhone, iPad, and Watch targets when Apple sources change. | TestFlight upload requires a manual `main` dispatch with its boolean input enabled. |
-| `terraform-deploy.yml` | Validates and applies reviewed infrastructure changes pushed to `main`; a manual production apply is also available. | Creates or changes GKE, Cloud SQL, IAM, networking, and related infrastructure. |
-| `gke-deploy.yml` | Validates PRs; relevant `main` pushes build, push, and deploy the web/API containers. | Uses Artifact Registry, GKE workloads, migrations, Ingress, and managed TLS. |
+| `apple-build.yml` | Compiles iPhone, iPad, and Watch targets when Apple sources change. | Relevant `main` pushes and manual release dispatches sign and upload to TestFlight; PRs compile and test only. |
+| `terraform-deploy.yml` | Production apply is paused; requires repository variable `GCP_DEPLOYMENTS_ENABLED=true` and manual opt-in. | Creates or changes GKE, Cloud SQL, IAM, networking, and related infrastructure. |
+| `gke-deploy.yml` | Validates changes; container publishing and deployment are paused behind the same repository variable and manual opt-in. | Uses Artifact Registry, GKE workloads, migrations, Ingress, and managed TLS. |
 
 The CI Repair Agent is a job inside `terraform-deploy.yml`, not a fourth
 workflow. It can only create a bounded draft repair PR; it never runs a

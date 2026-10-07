@@ -44,9 +44,14 @@ TestFlight uses direct signing in GitHub Actions; it does not use Fastlane,
 Match, a certificate repository, an Apple ID password, or a downloaded
 provisioning-profile secret.
 
-The release workflow is deliberately manual. In **Actions → Build Apple
-clients**, select `main` and set **distribute to TestFlight** to true. Ordinary
-pushes and pull requests only compile and test the targets.
+Apple source or workflow changes pushed to `main` compile, test, archive, and
+release to TestFlight, as in Claritas. Pull requests only compile and test.
+For another release, use **Actions → Build Apple clients → Run workflow**,
+select `main`, and leave **distribute to TestFlight** enabled. Uncheck it for
+a compile-only diagnostic run. Missing signing credentials fail the release.
+
+See [TestFlight release and manual setup](../../../docs/apple-testflight-release.md)
+for the current account configuration, credential commands, and device checks.
 
 ### One-time Apple setup
 

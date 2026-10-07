@@ -55,6 +55,7 @@ final class HealthKitClient: ObservableObject {
   }
 
   func requestAuthorization() {
+    guard !isRefreshing else { return }
     guard HKHealthStore.isHealthDataAvailable() else {
       lastError = "Apple Health is unavailable on this device."
       return
@@ -74,6 +75,7 @@ final class HealthKitClient: ObservableObject {
   }
 
   func refreshTodaySnapshot() async {
+    guard authorizationRequested, !isRefreshing else { return }
     guard HKHealthStore.isHealthDataAvailable() else {
       snapshot = RoburData.noHealthData
       hasHealthData = false

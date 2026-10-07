@@ -1,5 +1,9 @@
 # Robur administrator manual tasks
 
+Apple/TestFlight is the current delivery scope; start with
+[Apple release setup](apple-testflight-release.md). GCP deployments are paused.
+The GCP tasks below are deferred until that scope is resumed.
+
 Automation owns repeatable infrastructure, deployment wiring, and CI checks.
 The following remain manual because they select external account owners,
 approval policy, DNS ownership, or Apple credentials. The full GCP command

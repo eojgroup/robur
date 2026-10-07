@@ -53,7 +53,7 @@ def request_json(method, path, token, body: nil)
   request["Content-Type"] = "application/json"
   request.body = JSON.generate(body) if body
 
-  response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(request) }
+  response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true, open_timeout: 15, read_timeout: 60) { |http| http.request(request) }
   parsed = JSON.parse(response.body.empty? ? "{}" : response.body)
   return parsed if response.code.to_i.between?(200, 299)
 
@@ -178,7 +178,7 @@ identifiers.each do |identifier|
   end
 
   unless profile
-    profile_name = "Robur CI #{identifier} #{certificate_serial[-8, 8]}"
+    profile_name = "Robur CI #{identifier} #{certificate_serial[-8, 8]} #{Time.now.utc.strftime("%Y%m%d%H%M%S")}"
     profile = request_json(
       :post,
       "/v1/profiles",

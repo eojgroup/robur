@@ -47,7 +47,7 @@ def request_json(method, path, token, body: nil)
   request["Content-Type"] = "application/json"
   request.body = JSON.generate(body) if body
 
-  response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(request) }
+  response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true, open_timeout: 15, read_timeout: 60) { |http| http.request(request) }
   return {} if response.code.to_i == 204
 
   parsed = JSON.parse(response.body.empty? ? "{}" : response.body)
@@ -77,6 +77,12 @@ unless matching_groups.length == 1
   abort "Expected exactly one TestFlight group named #{group_name.inspect}, found #{matching_groups.length}. Available groups: #{names.join(", ")}"
 end
 group = matching_groups.first
+abort "TestFlight group #{group_name.inspect} must be an internal group" unless group.dig("attributes", "isInternalGroup") == true
+
+if ARGV.include?("--preflight")
+  puts "Validated App Store app #{app_store_connect_app_id} and internal group #{group_name}."
+  exit 0
+end
 
 build = nil
 40.times do |attempt|

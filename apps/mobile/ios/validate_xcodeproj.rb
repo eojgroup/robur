@@ -4,6 +4,7 @@
 required_paths = [
   "project.yml",
   "VERSION",
+  "Resources/PrivacyInfo.xcprivacy",
   "Sources/RoburApp/Info.plist",
   "Sources/RoburApp/Robur.entitlements",
   "Sources/RoburShared/HealthKitClient.swift",
@@ -26,4 +27,20 @@ unless Dir.exist?(project_path)
   exit 1
 end
 
-puts "Robur Apple project contract looks complete."
+require "xcodeproj"
+project = Xcodeproj::Project.open(project_path)
+{
+  "Robur" => "com.eojgroup.robur",
+  "RoburWatch Watch App" => "com.eojgroup.robur.watchkitapp"
+}.each do |name, identifier|
+  target = project.targets.find { |candidate| candidate.name == name }
+  abort "Missing target #{name}" unless target
+  target.build_configurations.each do |config|
+    abort "Wrong bundle ID on #{name}" unless config.build_settings["PRODUCT_BUNDLE_IDENTIFIER"] == identifier
+  end
+  resources = target.resources_build_phase.files_references.map { |file| File.basename(file.path.to_s) }
+  abort "Privacy manifest is not bundled in #{name}" unless resources.include?("PrivacyInfo.xcprivacy")
+end
+app = project.targets.find { |target| target.name == "Robur" }
+abort "Watch companion is not embedded" unless app.copy_files_build_phases.any? { |phase| phase.files_references.any? { |file| file == project.targets.find { |target| target.name == "RoburWatch Watch App" }.product_reference } }
+puts "Robur Apple project contracts verified, including both privacy manifests and embedded Watch app."

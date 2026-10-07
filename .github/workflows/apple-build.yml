@@ -15,22 +15,25 @@ on:
       distribute_to_testflight:
         description: "Archive and upload a successful build to TestFlight"
         required: true
-        default: false
+        default: true
         type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.distribute_to_testflight == true && 'testflight' || 'build' }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || inputs.distribute_to_testflight != true }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.distribute_to_testflight == true) && 'testflight' || 'build' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.distribute_to_testflight != true) }}
 
 jobs:
   build:
     name: Compile iPhone, iPad, and Watch
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
+
+      - name: Select release Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -38,6 +41,9 @@ jobs:
       - name: Generate project
         working-directory: apps/mobile/ios
         run: ruby generate_xcodeproj.rb
+
+      - name: Install project validation dependency
+        run: gem install xcodeproj --version 1.27.0 --no-document
 
       - name: Validate generated project contracts
         working-directory: apps/mobile/ios
@@ -85,11 +91,11 @@ jobs:
 
   testflight:
     name: Archive and distribute to TestFlight
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.distribute_to_testflight == true
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.distribute_to_testflight == true))
     needs: build
-    runs-on: macos-latest
+    runs-on: macos-15
     environment: production
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       APP_BUNDLE_ID: com.eojgroup.robur
       APP_STORE_CONNECT_APP_ID: ${{ vars.APP_STORE_CONNECT_APP_ID }}
@@ -104,6 +110,9 @@ jobs:
       APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
     steps:
       - uses: actions/checkout@v7
+
+      - name: Select release Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -131,6 +140,7 @@ jobs:
           done
           if [[ "${#missing[@]}" -gt 0 ]]; then
             printf 'Missing production signing configuration: %s\n' "${missing[*]}" >&2
+            echo 'Apple release blocked: add the signing secrets described in docs/apple-testflight-release.md to the production environment.' >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
@@ -150,7 +160,7 @@ jobs:
           echo "APP_BUILD_NUMBER=${build_major}.${build_minor}.${build_patch}" >> "$GITHUB_ENV"
 
       - name: Install direct-signing project dependency
-        run: gem install xcodeproj --no-document
+        run: gem install xcodeproj --version 1.27.0 --no-document
 
       - name: Generate release project
         working-directory: apps/mobile/ios
@@ -162,6 +172,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          umask 077
           signing_dir="$RUNNER_TEMP/robur-signing"
           mkdir -p "$signing_dir" "$HOME/.private_keys"
           printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY_P8" > "$signing_dir/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
@@ -189,6 +200,9 @@ jobs:
             echo "DISTRIBUTION_CERTIFICATE_PATH=$signing_dir/distribution.pem"
             echo "SIGNING_KEYCHAIN_PATH=$keychain_path"
           } >> "$GITHUB_ENV"
+
+      - name: Validate App Store app and internal tester group
+        run: ruby apps/mobile/ios/distribute_testflight.rb --preflight
 
       - name: Prepare App Store provisioning profiles
         working-directory: apps/mobile/ios
@@ -242,6 +256,11 @@ jobs:
       - name: Assign the preconfigured TestFlight group
         run: ruby apps/mobile/ios/distribute_testflight.rb
 
+      - name: Record TestFlight release
+        run: |
+          echo "Released Robur build $APP_BUILD_NUMBER to $TESTFLIGHT_GROUP_NAME." >> "$GITHUB_STEP_SUMMARY"
+          echo "App Store Connect: https://appstoreconnect.apple.com/apps/$APP_STORE_CONNECT_APP_ID/testflight" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload archive diagnostics
         if: always()
         uses: actions/upload-artifact@v7
@@ -258,7 +277,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          security delete-keychain "${SIGNING_KEYCHAIN_PATH:-}" || true
+          security delete-keychain "$RUNNER_TEMP/robur-signing.keychain-db" || true
           rm -f "$HOME/.private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
           rm -rf "$RUNNER_TEMP/robur-signing"
 
