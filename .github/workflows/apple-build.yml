@@ -30,6 +30,7 @@ concurrency:
 jobs:
   build:
     name: Compile iPhone, iPad, and Watch
+    timeout-minutes: 25
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
@@ -74,22 +75,39 @@ jobs:
             build
 
       - name: Test Health snapshot mapping
+        timeout-minutes: 15
         working-directory: apps/mobile/ios
         run: |
+          set -o pipefail
           simulator_id="$(xcrun simctl list devices available -j | ruby -rjson -e '
             devices = JSON.parse(STDIN.read).fetch("devices").values.flatten
             simulator = devices.find { |device| device["isAvailable"] && device["name"].start_with?("iPhone") }
             abort("No available iPhone simulator found") unless simulator
             print simulator.fetch("udid")
           ')"
+          xcrun simctl boot "$simulator_id" || true
+          xcrun simctl bootstatus "$simulator_id" -b
           xcodebuild \
             -project Robur.xcodeproj \
             -scheme Robur \
             -configuration Debug \
             -destination "id=${simulator_id}" \
+            -parallel-testing-enabled NO \
+            -resultBundlePath "$RUNNER_TEMP/RoburTests.xcresult" \
             CODE_SIGNING_ALLOWED=NO \
             -only-testing:RoburTests \
-            test
+            test 2>&1 | tee "$RUNNER_TEMP/robur-tests.log"
+
+      - name: Upload simulator test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: robur-apple-tests-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/robur-tests.log
+            ${{ runner.temp }}/RoburTests.xcresult
+          if-no-files-found: warn
+          retention-days: 14
 
   testflight:
     name: Archive and distribute to TestFlight
