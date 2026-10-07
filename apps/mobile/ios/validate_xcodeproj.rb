@@ -27,6 +27,17 @@ unless Dir.exist?(project_path)
   exit 1
 end
 
+require "json"
+icon_directory = File.join(__dir__, "Resources/Assets.xcassets/AppIcon.appiconset")
+JSON.parse(File.read(File.join(icon_directory, "Contents.json"))).fetch("images").each do |image|
+  filename = image.fetch("filename")
+  png = File.binread(File.join(icon_directory, filename))
+  size = (image.fetch("size").to_f * image.fetch("scale").to_f).round
+  dimensions = png.byteslice(16, 8).unpack("NN")
+  abort "Incorrect icon dimensions: #{filename}" unless dimensions == [size, size]
+  abort "App Store icon must be RGB without alpha: #{filename}" unless png.getbyte(25) == 2
+end
+
 require "xcodeproj"
 project = Xcodeproj::Project.open(project_path)
 {

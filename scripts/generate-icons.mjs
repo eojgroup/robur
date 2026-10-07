@@ -65,13 +65,13 @@ function lerp(a, b, t) {
 }
 
 function png(width, height) {
-  const raw = Buffer.alloc((width * 4 + 1) * height);
+  const raw = Buffer.alloc((width * 3 + 1) * height);
   const cx = width * 0.5;
   const cy = height * 0.5;
   const radius = width * 0.3;
 
   for (let y = 0; y < height; y += 1) {
-    const row = y * (width * 4 + 1);
+    const row = y * (width * 3 + 1);
     raw[row] = 0;
 
     for (let x = 0; x < width; x += 1) {
@@ -81,7 +81,7 @@ function png(width, height) {
       const dist = Math.sqrt(dx * dx + dy * dy);
       const band = Math.abs(dist - radius) < width * 0.035;
       const bar = Math.abs(x - cx) < width * 0.045 || Math.abs(y - cy) < height * 0.045;
-      const i = row + 1 + x * 4;
+      const i = row + 1 + x * 3;
 
       const bg = [
         lerp(18, 38, t),
@@ -94,7 +94,6 @@ function png(width, height) {
       raw[i] = accent[0];
       raw[i + 1] = accent[1];
       raw[i + 2] = accent[2];
-      raw[i + 3] = 255;
     }
   }
 
@@ -102,7 +101,8 @@ function png(width, height) {
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8;
-  ihdr[9] = 6;
+  // App Store icons must not contain an alpha channel, even if fully opaque.
+  ihdr[9] = 2;
   ihdr[10] = 0;
   ihdr[11] = 0;
   ihdr[12] = 0;

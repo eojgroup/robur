@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - "apps/mobile/ios/**"
+      - "scripts/generate-icons.mjs"
       - ".github/workflows/apple-build.yml"
   pull_request:
     paths:
       - "apps/mobile/ios/**"
+      - "scripts/generate-icons.mjs"
       - ".github/workflows/apple-build.yml"
   workflow_dispatch:
     inputs:
