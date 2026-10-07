@@ -26,6 +26,20 @@ then sign, archive, export, upload, wait for Apple processing, and deliver to
 `Robur Test Group`. PRs compile/test only. A successful compile alone does not
 count as a release: missing credentials fail the TestFlight job.
 
+## Verified release status
+
+[GitHub run 37598715928](https://github.com/eojgroup/robur/actions/runs/37598715928)
+verified the final source on 7 October 2026: both Apple app builds succeeded and
+all three simulator unit tests passed. Local TypeScript checks, 16 existing
+JavaScript tests, application builds, workflow linting, and six mocked
+App Store Connect distribution scenarios also passed.
+
+The TestFlight job stopped at its credential check, naming exactly the five
+secrets listed below. No signed archive or IPA was produced and no build was
+uploaded to Apple. Real provisioning, signing, upload, and group assignment
+remain to be verified after those credentials are supplied. Google Cloud
+production jobs were skipped as intended.
+
 ## One-time manual account tasks
 
 1. In [Apple Developer identifiers](https://developer.apple.com/account/resources/identifiers/list),
