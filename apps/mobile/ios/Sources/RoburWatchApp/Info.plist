@@ -22,6 +22,8 @@
   <string>$(CURRENT_PROJECT_VERSION)</string>
   <key>ITSAppUsesNonExemptEncryption</key>
   <false/>
+  <key>NSHealthUpdateUsageDescription</key>
+  <string>Robur uses HealthKit to personalize training recommendations. This version only reads your health data and does not save or change it.</string>
   <key>NSHealthShareUsageDescription</key>
   <string>Robur reads your workouts, sleep, resting heart rate, heart rate variability, running workout distance, and cycling distance to show your training recommendation.</string>
   <key>WKApplication</key>

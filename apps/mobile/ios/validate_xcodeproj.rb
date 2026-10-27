@@ -39,6 +39,12 @@ JSON.parse(File.read(File.join(icon_directory, "Contents.json"))).fetch("images"
 end
 
 require "xcodeproj"
+%w[RoburApp RoburWatchApp].each do |app_name|
+  plist = Xcodeproj::Plist.read_from_path(File.join(__dir__, "Sources", app_name, "Info.plist"))
+  %w[NSHealthShareUsageDescription NSHealthUpdateUsageDescription].each do |key|
+    abort "Missing HealthKit purpose string #{key} in #{app_name}" if plist[key].to_s.strip.empty?
+  end
+end
 project = Xcodeproj::Project.open(project_path)
 {
   "Robur" => "com.eojgroup.robur",

@@ -271,7 +271,13 @@ jobs:
             echo "No IPA was produced by xcodebuild -exportArchive." >&2
             exit 1
           fi
-          xcrun altool --upload-app --type ios --file "$ipa_path" --apiKey "$APP_STORE_CONNECT_KEY_ID" --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID"
+          upload_log="$RUNNER_TEMP/robur-upload.log"
+          xcrun altool --upload-app --type ios --file "$ipa_path" --apiKey "$APP_STORE_CONNECT_KEY_ID" --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID" 2>&1 | tee "$upload_log"
+          # altool can report a rejected upload while returning exit status zero.
+          if ! grep -q 'UPLOAD SUCCEEDED' "$upload_log"; then
+            echo "Apple did not confirm a successful upload. See robur-upload.log." >&2
+            exit 1
+          fi
 
       - name: Assign the preconfigured TestFlight group
         run: ruby apps/mobile/ios/distribute_testflight.rb
@@ -289,6 +295,7 @@ jobs:
           path: |
             ${{ runner.temp }}/robur-archive.log
             ${{ runner.temp }}/robur-export.log
+            ${{ runner.temp }}/robur-upload.log
             ${{ runner.temp }}/Robur.xcarchive/Info.plist
           if-no-files-found: warn
           retention-days: 14

@@ -24,6 +24,8 @@
   <false/>
   <key>LSRequiresIPhoneOS</key>
   <true/>
+  <key>NSHealthUpdateUsageDescription</key>
+  <string>Robur uses HealthKit to personalize training recommendations. This version only reads your health data and does not save or change it.</string>
   <key>NSHealthShareUsageDescription</key>
   <string>Robur reads your workouts, sleep, resting heart rate, heart rate variability, running workout distance, and cycling distance to personalize a training recommendation.</string>
   <key>UIApplicationSceneManifest</key>
