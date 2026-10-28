@@ -8,7 +8,9 @@ is needed to validate HealthKit reads on a physical device.
 
 Both native targets use the same on-device `HealthKitClient` and request read
 access to workouts, sleep analysis, resting heart rate, HRV, and cycling
-distance. It then calculates a local Today snapshot:
+distance. The iPhone/iPad app additionally requests heart rate, active energy
+and VO₂ max to show per-workout details and historical fitness charts. It then
+calculates a local Today snapshot:
 
 - Sleep is the union of approved asleep-stage samples in the latest 36 hours,
   so overlapping Core, Deep, and REM samples are not double-counted.
@@ -112,3 +114,36 @@ device test can confirm Apple Health authorization and real data availability.
   sharing. HealthKit data must not be used for advertising or sale.
 
 See Apple's [HealthKit authorization guidance](https://developer.apple.com/documentation/healthkit/authorizing-access-to-health-data), [HealthKit privacy guidance](https://developer.apple.com/documentation/healthkit/protecting-user-privacy), and [TestFlight overview](https://developer.apple.com/help/app-store-connect/test-a-beta-version/testflight-overview/).
+
+
+## Workout journal, history and automatic gym visits
+
+- Share workout and fitness history, select **All history**, and compare the
+  earliest visible workout with the Health app. Also try a restricted-history
+  authorization. Switch back to 30 days and confirm no older records remain.
+- Tag muscles, set effort, add notes and a gym to a real workout. Relaunch and
+  confirm the details persist. Clear effort and confirm that session is excluded
+  from effort load, while its duration remains in training volume.
+- Compare weekly/monthly VO₂ max, resting HR and HRV chart averages with the
+  underlying Health readings. Choose a chart date and verify the related
+  workouts are from that same period. No-data types must remain empty.
+- At your gym, save its position in **Places**, enable **Automatic gym visits**,
+  and grant **Always** location access. Keep Precise Location and Background
+  App Refresh enabled. Leave, return and leave again with the phone locked;
+  verify one approximate detected visit, with no duplicate records. Geofence
+  delivery can be delayed by iOS and is not guaranteed after force-quit.
+- Manually check out while still inside the region. Verify that repeated inside
+  events do not reopen the visit until a departure and later arrival.
+- Confirm automatic events cannot replace or close a manual check-in. Disable
+  automatic detection and verify monitored regions stop. Revoke Always/Precise
+  access or Background App Refresh and confirm the app explains the missing
+  setting and leaves manual check-in available.
+- Update an existing gym position and verify the old region is replaced. Delete
+  a mistaken detected visit and verify the original Health workout is unchanged.
+  A gym visit alone must never create a Health workout.
+- Review all screens on iPhone/iPad in light/dark appearance, with large text and
+  VoiceOver. Simulator previews use explicit test fixtures, never sample values
+  in the shipped application's normal data path.
+
+Apple's [region monitoring documentation](https://developer.apple.com/library/archive/documentation/UserExperience/Conceptual/LocationAwarenessPG/RegionMonitoring/RegionMonitoring.html)
+explains background event delivery and the limit of 20 monitored regions per app.

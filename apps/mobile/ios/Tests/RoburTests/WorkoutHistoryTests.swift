@@ -89,4 +89,64 @@ final class WorkoutHistoryTests: XCTestCase {
     XCTAssertTrue(journal.gyms.isEmpty)
     XCTAssertEqual(try Data(contentsOf: url), original)
   }
+  func testMonitoringPlanSkipsUnpositionedInvalidAndExcessGyms() {
+    var gyms = (0..<25).map { GymLocation(name: "Gym \($0)", latitude: 52, longitude: 13) }
+    gyms.insert(GymLocation(name: "No position"), at: 0)
+    gyms.insert(GymLocation(name: "Invalid", latitude: 100, longitude: 13), at: 1)
+    let selected = GymMonitoringPlan.locations(gyms)
+    XCTAssertEqual(selected.count, 20)
+    XCTAssertEqual(selected.first?.name, "Gym 0")
+    XCTAssertEqual(selected.last?.name, "Gym 19")
+  }
+
+  @MainActor
+  func testAutomaticEventsAreIdempotentAndManualCheckoutSuppressesUntilExit() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("journal.json")
+    let journal = WorkoutJournal(url: url)
+    XCTAssertTrue(journal.addGym(name: "Gym", latitude: 52, longitude: 13))
+    let gym = try XCTUnwrap(journal.gyms.first)
+    journal.automaticArrival(gymID: gym.id)
+    journal.automaticArrival(gymID: gym.id)
+    XCTAssertEqual(journal.visits.count, 1)
+    XCTAssertEqual(journal.activeVisit?.automatic, true)
+    journal.checkOut()
+    let reloaded = WorkoutJournal(url: url)
+    reloaded.automaticArrival(gymID: gym.id)
+    XCTAssertNil(reloaded.activeVisit)
+    reloaded.automaticDeparture(gymID: gym.id)
+    reloaded.automaticArrival(gymID: gym.id)
+    XCTAssertEqual(reloaded.visits.count, 2)
+    XCTAssertNotNil(reloaded.activeVisit)
+    reloaded.endAutomaticVisit()
+    XCTAssertNil(reloaded.activeVisit)
+  }
+
+  @MainActor
+  func testAutomaticEventsDoNotReplaceOrEndManualCheckIn() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let journal = WorkoutJournal(url: directory.appendingPathComponent("journal.json"))
+    XCTAssertTrue(journal.addGym(name: "Gym A"))
+    XCTAssertTrue(journal.addGym(name: "Gym B"))
+    let first = journal.gyms[0]
+    let second = journal.gyms[1]
+    journal.checkIn(first)
+    journal.automaticArrival(gymID: second.id)
+    journal.automaticDeparture(gymID: first.id)
+    XCTAssertEqual(journal.activeVisit?.gymID, first.id)
+    XCTAssertEqual(journal.visits.count, 1)
+  }
+
+  @MainActor
+  func testCanReadJournalWrittenBeforeAutomaticDetectionWasAdded() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: url) }
+    try Data(#"{"annotations":{},"gyms":[],"visits":[]}"#.utf8).write(to: url)
+    let journal = WorkoutJournal(url: url)
+    XCTAssertNil(journal.storageError)
+    XCTAssertTrue(journal.addGym(name: "Gym"))
+  }
+
 }

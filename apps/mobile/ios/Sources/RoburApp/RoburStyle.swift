@@ -20,7 +20,7 @@ extension View {
 }
 
 struct RoburRootView: View {
-  @StateObject private var journal = WorkoutJournal()
+  @EnvironmentObject private var journal: WorkoutJournal
   var body: some View {
     TabView {
       RoburTodayView().tabItem { Label("Today", systemImage: "sun.max") }
@@ -29,7 +29,6 @@ struct RoburRootView: View {
       GymLocationsView().tabItem { Label("Places", systemImage: "mappin.and.ellipse") }
     }
     .tint(RoburStyle.teal)
-    .environmentObject(journal)
     .alert("Workout journal", isPresented: Binding(get: { journal.storageError != nil }, set: { if !$0 { journal.storageError = nil } })) {
       Button("OK") { journal.storageError = nil }
     } message: { Text(journal.storageError ?? "") }

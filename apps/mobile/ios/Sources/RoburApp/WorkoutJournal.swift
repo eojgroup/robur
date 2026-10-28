@@ -9,11 +9,13 @@ final class WorkoutJournal: ObservableObject {
   @Published var storageError: String?
   private let url: URL
   private var unreadableArchive = false
+  private var suppressedGyms: Set<UUID> = []
 
   private struct Archive: Codable {
     var annotations: [String: WorkoutAnnotation]
     var gyms: [GymLocation]
     var visits: [GymVisit]
+    var suppressedGyms: Set<UUID>? = nil
   }
 
   init(url: URL? = nil) {
@@ -24,6 +26,7 @@ final class WorkoutJournal: ObservableObject {
       annotations = archive.annotations
       gyms = archive.gyms
       visits = archive.visits
+      suppressedGyms = archive.suppressedGyms ?? []
     } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
       // A new journal starts empty.
     } catch {
@@ -53,17 +56,32 @@ final class WorkoutJournal: ObservableObject {
     return false
   }
 
+  func updateGymPosition(id: UUID, latitude: Double, longitude: Double) {
+    guard latitude.isFinite, longitude.isFinite, (-90...90).contains(latitude), (-180...180).contains(longitude),
+          let index = gyms.firstIndex(where: { $0.id == id }) else { return }
+    let previous = archive
+    gyms[index].latitude = latitude
+    gyms[index].longitude = longitude
+    suppressedGyms.remove(id)
+    if let visitIndex = visits.lastIndex(where: { $0.gymID == id && $0.end == nil && $0.automatic == true }) {
+      visits[visitIndex].end = Date()
+    }
+    if !persist() { restore(previous) }
+  }
+
   func deleteGym(_ gym: GymLocation) {
-    let previous = Archive(annotations: annotations, gyms: gyms, visits: visits)
+    let previous = archive
     gyms.removeAll { $0.id == gym.id }
     for id in Array(annotations.keys) where annotations[id]?.gymID == gym.id {
       annotations[id]?.gymID = nil
     }
     visits.removeAll { $0.gymID == gym.id }
+    suppressedGyms.remove(gym.id)
     if !persist() {
       annotations = previous.annotations
       gyms = previous.gyms
       visits = previous.visits
+      suppressedGyms = previous.suppressedGyms ?? []
     }
   }
 
@@ -80,9 +98,10 @@ final class WorkoutJournal: ObservableObject {
 
   func checkOut(now: Date = Date()) {
     if let index = visits.lastIndex(where: { $0.end == nil }) {
-      let previous = visits
+      let previous = archive
+      suppressedGyms.insert(visits[index].gymID)
       visits[index].end = max(now, visits[index].start)
-      if !persist() { visits = previous }
+      if !persist() { restore(previous) }
     }
   }
 
@@ -90,6 +109,49 @@ final class WorkoutJournal: ObservableObject {
     visits.last { visit in
       visit.start <= workout.end && (visit.end ?? Date()) >= workout.start
     }?.gymID
+  }
+
+  func automaticArrival(gymID: UUID, now: Date = Date()) {
+    guard gyms.contains(where: { $0.id == gymID }), !suppressedGyms.contains(gymID) else { return }
+    if let active = activeVisit {
+      guard active.gymID != gymID && active.automatic == true else { return }
+    }
+    let previous = archive
+    if let index = visits.lastIndex(where: { $0.end == nil }) { visits[index].end = max(now, visits[index].start) }
+    visits.append(GymVisit(gymID: gymID, start: now, automatic: true))
+    if !persist() { restore(previous) }
+  }
+
+  func automaticDeparture(gymID: UUID, now: Date = Date()) {
+    let previous = archive
+    suppressedGyms.remove(gymID)
+    if let index = visits.lastIndex(where: { $0.end == nil && $0.gymID == gymID && $0.automatic == true }) {
+      visits[index].end = max(now, visits[index].start)
+    }
+    if !persist() { restore(previous) }
+  }
+
+  func endAutomaticVisit(now: Date = Date()) {
+    guard activeVisit?.automatic == true else { return }
+    checkOut(now: now)
+  }
+
+  func deleteVisit(_ visit: GymVisit) {
+    let previous = archive
+    if visit.end == nil { suppressedGyms.insert(visit.gymID) }
+    visits.removeAll { $0.id == visit.id }
+    if !persist() { restore(previous) }
+  }
+
+  private var archive: Archive {
+    Archive(annotations: annotations, gyms: gyms, visits: visits, suppressedGyms: suppressedGyms)
+  }
+
+  private func restore(_ archive: Archive) {
+    annotations = archive.annotations
+    gyms = archive.gyms
+    visits = archive.visits
+    suppressedGyms = archive.suppressedGyms ?? []
   }
 
   @discardableResult
@@ -100,9 +162,9 @@ final class WorkoutJournal: ObservableObject {
     }
     do {
       try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-      let data = try JSONEncoder().encode(Archive(annotations: annotations, gyms: gyms, visits: visits))
+      let data = try JSONEncoder().encode(archive)
       #if os(iOS)
-      try data.write(to: url, options: [.atomic, .completeFileProtection])
+      try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
       #else
       try data.write(to: url, options: .atomic)
       #endif

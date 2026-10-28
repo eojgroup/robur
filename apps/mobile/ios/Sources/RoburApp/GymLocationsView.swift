@@ -67,11 +67,14 @@ final class GymLocator: NSObject, ObservableObject, CLLocationManagerDelegate {
 
 struct GymLocationsView: View {
   @EnvironmentObject private var journal: WorkoutJournal
+  @EnvironmentObject private var monitor: GymMonitor
+  @Environment(\.openURL) private var openURL
   @StateObject private var locator = GymLocator()
   @State private var adding = false
   @State private var name = ""
   @State private var savePosition = false
   @State private var deleting: GymLocation?
+  @State private var updatingGymID: UUID?
 
   private var nearby: GymLocation? {
     journal.gyms.compactMap { gym -> (GymLocation, Double)? in
@@ -87,11 +90,24 @@ struct GymLocationsView: View {
           VStack(alignment: .leading, spacing: 6) {
             Text("SHOW UP. BUILD MOMENTUM.").font(.caption.bold()).foregroundStyle(RoburStyle.teal)
             Text("Your training places").font(.largeTitle.bold())
-            Text("Save your gym and keep a record of your visits.").foregroundStyle(.secondary)
+            Text("Save your gym and let Robur notice when you arrive.").foregroundStyle(.secondary)
           }
+          VStack(alignment: .leading, spacing: 12) {
+            Toggle("Automatic gym visits", isOn: Binding(get: { monitor.enabled }, set: { monitor.setEnabled($0) }))
+              .font(.headline)
+            Text(monitor.status).font(.subheadline).foregroundStyle(.secondary)
+            if monitor.enabled {
+              Button("Location & background settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+              }
+            }
+            if let error = monitor.error { Text(error).font(.caption).foregroundStyle(.red) }
+            Text("Detects arrivals and departures around saved gym positions. Requires Always location access, Precise Location and Background App Refresh. iOS may delay events or miss visits after force-quit; times are approximate. Passing a gym can also register a visit. You can remove detected visits below.")
+              .font(.caption).foregroundStyle(.secondary)
+          }.roburCard()
           if let visit = journal.activeVisit {
             VStack(alignment: .leading, spacing: 12) {
-              Label("Checked in", systemImage: "location.fill").foregroundStyle(RoburStyle.teal).font(.headline)
+              Label(visit.automatic == true ? "Detected gym visit" : "Checked in", systemImage: "location.fill").foregroundStyle(RoburStyle.teal).font(.headline)
               Text(journal.gymName(visit.gymID) ?? "Fitness centre").font(.title2.bold())
               Text("Since \(visit.start.formatted(date: .abbreviated, time: .shortened))")
               Button("Check out") { journal.checkOut() }.buttonStyle(.borderedProminent)
@@ -103,7 +119,7 @@ struct GymLocationsView: View {
             Label("Find a saved gym nearby", systemImage: "location.magnifyingglass").font(.headline)
             Text("Use your position once to suggest a saved place within 200 metres. Confirm check-in yourself.")
               .font(.subheadline).foregroundStyle(.secondary)
-            Button { locator.locate() } label: { Label("Find nearby", systemImage: "location") }
+            Button { updatingGymID = nil; locator.locate() } label: { Label("Find nearby", systemImage: "location") }
               .buttonStyle(.bordered).disabled(locator.locating)
             if locator.locating { ProgressView("Finding your position…") }
             if let nearby {
@@ -118,7 +134,7 @@ struct GymLocationsView: View {
           HStack {
             Text("SAVED PLACES").font(.caption.bold()).foregroundStyle(.secondary)
             Spacer()
-            Button { name = ""; savePosition = false; adding = true } label: { Label("Add place", systemImage: "plus") }
+            Button { updatingGymID = nil; name = ""; savePosition = false; adding = true } label: { Label("Add place", systemImage: "plus") }
           }
           if journal.gyms.isEmpty {
             ContentUnavailableView("Make it your place", systemImage: "mappin.and.ellipse",
@@ -135,10 +151,18 @@ struct GymLocationsView: View {
               if let distance = locator.distance(to: gym) {
                 Text("\(Int(distance)) m away").font(.caption).foregroundStyle(.secondary)
               }
+              if monitor.enabled {
+                Text(monitor.monitoredGymIDs.contains(gym.id) ? "Automatic detection enabled" : "Not monitored: save a position or check detection status above")
+                  .font(.caption).foregroundStyle(.secondary)
+              }
               let count = journal.visits.filter { $0.gymID == gym.id }.count
               Text("\(count) recorded visits").font(.caption).foregroundStyle(.secondary)
               Button("Check in") { journal.checkIn(gym) }.buttonStyle(.bordered)
                 .disabled(journal.activeVisit?.gymID == gym.id)
+              Button("Save my current position for this gym") {
+                updatingGymID = gym.id
+                locator.locate()
+              }.font(.caption).disabled(locator.locating)
             }.roburCard()
           }
           if !journal.visits.isEmpty {
@@ -146,7 +170,13 @@ struct GymLocationsView: View {
               Text("Recent visits").font(.headline)
               ForEach(Array(journal.visits.suffix(10).reversed())) { visit in
                 VStack(alignment: .leading, spacing: 4) {
-                  Text(journal.gymName(visit.gymID) ?? "Fitness centre").font(.subheadline.bold())
+                  HStack {
+                    Text(journal.gymName(visit.gymID) ?? "Fitness centre").font(.subheadline.bold())
+                    Spacer()
+                    Button(role: .destructive) { journal.deleteVisit(visit) } label: { Image(systemName: "trash") }
+                      .accessibilityLabel("Delete visit to \(journal.gymName(visit.gymID) ?? "fitness centre")")
+                  }
+                  Text(visit.automatic == true ? "Automatically detected · approximate times" : "Manual check-in").font(.caption).foregroundStyle(.secondary)
                   Text(visit.start.formatted(date: .abbreviated, time: .shortened)).font(.caption)
                   if let end = visit.end {
                     Text("\(max(0, Int(end.timeIntervalSince(visit.start) / 60))) min visit").font(.caption).foregroundStyle(.secondary)
@@ -155,12 +185,18 @@ struct GymLocationsView: View {
               }
             }.roburCard()
           }
-          Text("Your saved places and visit times stay on this device. Location is used only when you request it. Robur does not track visits in the background. In a workout’s details, a visit overlapping that workout suggests its place for you to confirm.")
+          Text("Your saved places and visits stay on this device. Automatic detection monitors saved gym regions in the background when you enable it; it does not record a continuous route. A visit overlapping a Health workout suggests its place in workout details for you to confirm. Manual check-in remains available.")
             .font(.footnote).foregroundStyle(.secondary)
         }.padding()
       }.background(RoburStyle.background)
         .navigationTitle("Places").navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $adding) { addPlace }
+        .onChange(of: locator.location) { _, location in
+          guard let id = updatingGymID, let location else { return }
+          journal.updateGymPosition(id: id, latitude: location.coordinate.latitude, longitude: location.coordinate.longitude)
+          updatingGymID = nil
+        }
+        .onChange(of: locator.message) { _, message in if message != nil { updatingGymID = nil } }
         .confirmationDialog("Delete this place and its visit history?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
           Button("Delete place", role: .destructive) {
             if let deleting { journal.deleteGym(deleting) }

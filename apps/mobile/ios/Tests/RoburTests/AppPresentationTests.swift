@@ -30,6 +30,7 @@ final class AppPresentationTests: XCTestCase {
       XCTAssertTrue(journal.save(WorkoutAnnotation(muscles: [.back, .glutes], effort: 7,
         gymID: journal.gyms.first?.id, notes: "Deadlift and row session"), for: workout))
     }
+    let monitor = GymMonitor(journal: journal, defaults: defaults)
     let screens: [(String, AnyView)] = [
       ("today", AnyView(RoburTodayView())),
       ("workouts", AnyView(WorkoutHistoryView())),
@@ -38,10 +39,14 @@ final class AppPresentationTests: XCTestCase {
     ]
     let output = FileManager.default.temporaryDirectory.appendingPathComponent("robur-previews")
     try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let originalWindow = scene.windows.first { $0.isKeyWindow }
+    defer { originalWindow?.makeKeyAndVisible() }
     for (name, screen) in screens {
       for dark in [false, true] {
-        let controller = UIHostingController(rootView: screen.environmentObject(health).environmentObject(journal))
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+        let controller = UIHostingController(rootView: screen.environmentObject(health).environmentObject(journal).environmentObject(monitor))
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
         window.rootViewController = controller
         window.overrideUserInterfaceStyle = dark ? .dark : .light
         window.makeKeyAndVisible()

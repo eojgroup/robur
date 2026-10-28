@@ -135,19 +135,29 @@ while workout minutes and effort load use totals. Select either chart to inspect
 workouts from the same period. Muscle charts count tagged sessions per group.
 Missing Health readings are not replaced with estimated fitness values.
 
-Places saves names with optional coordinates, offers on-demand foreground
-location matching within 200 m, and records explicitly confirmed check-ins and
-check-outs. Positions older than two minutes or less accurate than 100 m are
-not used for nearby suggestions. A visit overlapping a workout suggests its
-gym in the workout editor; users confirm by saving. Presence alone never creates
-a workout. No background location permission or automatic workout recording is
-used. Notes, places and visits are stored atomically in an iOS file protected
-with complete file protection. Existing journal data is preserved if unreadable.
+Places saves names with optional coordinates, offers foreground matching within
+200 m, and supports both manual check-ins and opt-in automatic background gym
+visits. Automatic detection uses Core Location circular-region entry/exit events
+with Always authorization, Precise Location and Background App Refresh. At most
+20 saved positions are monitored, in save order, with the limit visible in the
+UI. It does not start continuous GPS tracking or create Health workouts from
+presence. The application delegate restores the location delegate on background
+launch. iOS can delay region events or stop delivery after force-quit; manual
+check-in remains available. Detected visits are labeled approximate and can be
+deleted. Duplicate events are idempotent; automatic exits cannot close a manual
+visit. A manual checkout suppresses repeat arrival until a region exit.
+
+Positions older than two minutes or less accurate than 100 m are not used for
+foreground suggestions. An overlapping visit suggests a gym in the workout
+editor for the user to confirm. Notes, places and visits are written atomically
+with iOS complete protection until first user authentication, so background
+region events can be saved while locked after the first unlock. An unreadable
+existing journal is preserved.
 
 Existing users should tap **Access** on Today or **Manage Health access** in
 Workouts/Progress to authorize newly supported data categories. For existing
 permission changes, use the Health app. Real-device validation must include old
 history, partial permissions, empty VO₂ max history, location denial, inaccurate
-positions, overlapping gym visits, saved tags after relaunch, light/dark mode,
+positions, background arrivals/departures while locked, permission downgrade, disabling detection, overlapping gym visits, saved tags after relaunch, light/dark mode,
 VoiceOver, and large text. Location and actual Health readings cannot be fully
 verified in a simulator.

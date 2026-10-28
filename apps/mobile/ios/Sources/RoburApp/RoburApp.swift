@@ -2,12 +2,17 @@ import SwiftUI
 
 @main
 struct RoburApp: App {
+  @UIApplicationDelegateAdaptor(RoburAppDelegate.self) private var appDelegate
+  @StateObject private var journal = RoburServices.shared.journal
+  @StateObject private var gymMonitor = RoburServices.shared.gymMonitor
   @StateObject private var healthKit = HealthKitClient()
 
   var body: some Scene {
     WindowGroup {
       RoburRootView()
         .environmentObject(healthKit)
+        .environmentObject(journal)
+        .environmentObject(gymMonitor)
     }
   }
 }
