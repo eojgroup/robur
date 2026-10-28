@@ -33,6 +33,8 @@ targets:
           CODE_SIGN_IDENTITY: Apple Distribution
     dependencies:
       - sdk: HealthKit.framework
+      - sdk: CoreLocation.framework
+      - sdk: Charts.framework
       - target: RoburWatch Watch App
         embed: true
   RoburWatch Watch App:

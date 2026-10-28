@@ -118,3 +118,36 @@ Apple-valid build number from the GitHub workflow run, so repeated TestFlight
 releases do not collide with build `1`. The current local-only application has
 no custom cryptography, so both app targets declare exempt encryption; revisit
 that declaration before adding non-exempt encryption.
+
+## Workout journal and progress
+
+The iPhone/iPad app has Today, Workouts, Progress and Places tabs. Workouts
+imports Apple Health workouts and supports local muscle tags, perceived effort
+(1–10), notes and a saved gym. Session load is minutes × self-rated effort in
+arbitrary units; unrated workouts are excluded from effort charts. These details
+are not written to HealthKit and do not sync to the Watch or other devices.
+
+Progress offers 30 days, 90 days, one year and all available Health history.
+There is no app-imposed date cutoff or sample count limit for All history;
+Apple Health permissions and device availability still determine coverage.
+VO₂ max, resting HR and HRV use weekly means (monthly for year/all-history),
+while workout minutes and effort load use totals. Select either chart to inspect
+workouts from the same period. Muscle charts count tagged sessions per group.
+Missing Health readings are not replaced with estimated fitness values.
+
+Places saves names with optional coordinates, offers on-demand foreground
+location matching within 200 m, and records explicitly confirmed check-ins and
+check-outs. Positions older than two minutes or less accurate than 100 m are
+not used for nearby suggestions. A visit overlapping a workout suggests its
+gym in the workout editor; users confirm by saving. Presence alone never creates
+a workout. No background location permission or automatic workout recording is
+used. Notes, places and visits are stored atomically in an iOS file protected
+with complete file protection. Existing journal data is preserved if unreadable.
+
+Existing users should tap **Access** on Today or **Manage Health access** in
+Workouts/Progress to authorize newly supported data categories. For existing
+permission changes, use the Health app. Real-device validation must include old
+history, partial permissions, empty VO₂ max history, location denial, inaccurate
+positions, overlapping gym visits, saved tags after relaunch, light/dark mode,
+VoiceOver, and large text. Location and actual Health readings cannot be fully
+verified in a simulator.

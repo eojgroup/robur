@@ -11,6 +11,15 @@ final class HealthKitClient: ObservableObject {
   @Published private(set) var lastUpdated: Date?
   @Published private(set) var lastError: String?
 
+  #if os(iOS)
+  @Published private(set) var workouts: [WorkoutRecord] = []
+  @Published private(set) var fitnessReadings: [FitnessReading] = []
+  @Published private(set) var historyRange: HistoryRange = .quarter
+  @Published private(set) var isLoadingHistory = false
+  @Published private(set) var historyError: String?
+  private var historyRequest = UUID()
+  #endif
+
   private static let authorizationRequestKey = "RoburHealthKitAuthorizationRequested"
 
   private let store: HKHealthStore
@@ -48,10 +57,10 @@ final class HealthKitClient: ObservableObject {
 
   var promptMessage: String {
     if authorizationRequested {
-      return "Robur reads your approved Health data on this device. If values are missing, check Robur's access in the Health app."
+      return "Robur reads approved Health data on this device. Use Access to share newly supported cardio fitness, heart rate and active energy. Manage existing permissions and history in the Health app."
     }
 
-    return "Robur reads workouts, sleep, resting heart rate, HRV, running distance, and cycling distance to calculate today's recommendation."
+    return "Robur reads workouts, sleep, heart rate, HRV, active energy, distances and cardio fitness to show your training and progress. Choose which categories and history to share."
   }
 
   func requestAuthorization() {
@@ -92,19 +101,28 @@ final class HealthKitClient: ObservableObject {
       hasHealthData = metrics.hasData
       lastUpdated = Date()
       lastError = nil
+      #if os(iOS)
+      await loadHistory(range: historyRange)
+      #endif
     } catch {
       lastError = "Unable to read Apple Health data: \(error.localizedDescription)"
     }
   }
 
   private var readTypes: Set<HKObjectType> {
-    Set([
+    var types: Set<HKObjectType> = [
       HKObjectType.workoutType(),
       HKObjectType.quantityType(forIdentifier: .restingHeartRate)!,
       HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN)!,
       HKObjectType.quantityType(forIdentifier: .distanceCycling)!,
       HKObjectType.categoryType(forIdentifier: .sleepAnalysis)!
-    ])
+    ]
+    #if os(iOS)
+    types.insert(HKObjectType.quantityType(forIdentifier: .heartRate)!)
+    types.insert(HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!)
+    types.insert(HKObjectType.quantityType(forIdentifier: .vo2Max)!)
+    #endif
+    return types
   }
 
   private func readMetrics() async throws -> HealthMetrics {
@@ -334,3 +352,95 @@ private struct WeeklyWorkoutMetrics {
   let trainingMinutes: Int
   let workoutCount: Int
 }
+
+#if os(iOS)
+extension HealthKitClient {
+  func loadHistory(range: HistoryRange) async {
+    guard authorizationRequested, HKHealthStore.isHealthDataAvailable() else { return }
+    if isLoadingHistory && range == historyRange { return }
+    if historyRange != range {
+      workouts = []
+      fitnessReadings = []
+    }
+    historyRange = range
+    let request = UUID()
+    historyRequest = request
+    isLoadingHistory = true
+    historyError = nil
+    defer { if historyRequest == request { isLoadingHistory = false } }
+    let start = range.startDate() ?? store.earliestPermittedSampleDate()
+    let end = Date()
+    do {
+      async let workoutSamples = historySamples(type: HKObjectType.workoutType(), start: start, end: end)
+      async let cardio = historyReadings(identifier: .vo2Max, metric: .cardio,
+        unit: HKUnit(from: "ml/kg*min"), start: start, end: end)
+      async let resting = historyReadings(identifier: .restingHeartRate, metric: .restingHR,
+        unit: HKUnit.count().unitDivided(by: .minute()), start: start, end: end)
+      async let variability = historyReadings(identifier: .heartRateVariabilitySDNN, metric: .hrv,
+        unit: .secondUnit(with: .milli), start: start, end: end)
+      let samples = try await workoutSamples
+      let readings = try await cardio + resting + variability
+      guard historyRequest == request else { return }
+      workouts = samples.compactMap { sample in
+        guard let workout = sample as? HKWorkout else { return nil }
+        let heartType = HKQuantityType.quantityType(forIdentifier: .heartRate)!
+        let energyType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned)!
+        let info = Self.workoutPresentation(workout.workoutActivityType)
+        return WorkoutRecord(id: workout.uuid.uuidString, start: workout.startDate, end: workout.endDate,
+          title: info.0, symbol: info.1, minutes: workout.duration / 60,
+          distanceKm: workout.totalDistance?.doubleValue(for: .meterUnit(with: .kilo)),
+          energyKcal: workout.statistics(for: energyType)?.sumQuantity()?.doubleValue(for: .kilocalorie()),
+          averageHeartRate: workout.statistics(for: heartType)?.averageQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())),
+          source: workout.sourceRevision.source.name)
+      }
+      fitnessReadings = readings.sorted { $0.date < $1.date }
+    } catch {
+      guard historyRequest == request else { return }
+      historyError = "Unable to load history: \(error.localizedDescription). Pull to refresh to retry."
+    }
+  }
+
+  private func historySamples(type: HKSampleType, start: Date, end: Date) async throws -> [HKSample] {
+    let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+    return try await withCheckedThrowingContinuation { continuation in
+      let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit,
+        sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)]) { _, samples, error in
+        if let error { continuation.resume(throwing: error) }
+        else { continuation.resume(returning: samples ?? []) }
+      }
+      store.execute(query)
+    }
+  }
+
+  private func historyReadings(identifier: HKQuantityTypeIdentifier, metric: FitnessMetric,
+                               unit: HKUnit, start: Date, end: Date) async throws -> [FitnessReading] {
+    let samples = try await historySamples(type: HKQuantityType.quantityType(forIdentifier: identifier)!, start: start, end: end)
+    return samples.compactMap { sample in
+      guard let quantity = sample as? HKQuantitySample else { return nil }
+      return FitnessReading(id: quantity.uuid.uuidString, date: quantity.startDate,
+                            value: quantity.quantity.doubleValue(for: unit), metric: metric)
+    }
+  }
+
+  private static func workoutPresentation(_ type: HKWorkoutActivityType) -> (String, String) {
+    switch type {
+    case .running: return ("Run", "figure.run")
+    case .cycling: return ("Cycle", "figure.outdoor.cycle")
+    case .traditionalStrengthTraining: return ("Strength", "dumbbell.fill")
+    case .functionalStrengthTraining: return ("Functional strength", "figure.strengthtraining.functional")
+    case .walking: return ("Walk", "figure.walk")
+    case .hiking: return ("Hike", "figure.hiking")
+    case .swimming: return ("Swim", "figure.pool.swim")
+    case .yoga: return ("Yoga", "figure.yoga")
+    case .pilates: return ("Pilates", "figure.pilates")
+    case .highIntensityIntervalTraining: return ("Intervals", "bolt.heart.fill")
+    case .rowing: return ("Row", "figure.rower")
+    case .elliptical: return ("Elliptical", "figure.elliptical")
+    case .stairClimbing: return ("Stairs", "figure.stair.stepper")
+    case .dance: return ("Dance", "figure.dance")
+    case .coreTraining: return ("Core", "figure.core.training")
+    default: return ("Workout", "figure.mixed.cardio")
+    }
+  }
+}
+#endif

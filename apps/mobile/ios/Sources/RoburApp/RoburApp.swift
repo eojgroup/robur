@@ -6,7 +6,7 @@ struct RoburApp: App {
 
   var body: some Scene {
     WindowGroup {
-      RoburTodayView()
+      RoburRootView()
         .environmentObject(healthKit)
     }
   }
@@ -14,6 +14,8 @@ struct RoburApp: App {
 
 struct RoburTodayView: View {
   @EnvironmentObject private var healthKit: HealthKitClient
+  @EnvironmentObject private var journal: WorkoutJournal
+  @State private var selected: WorkoutRecord?
 
   private var snapshot: FitnessSnapshot {
     healthKit.snapshot ?? RoburData.noHealthData
@@ -24,20 +26,32 @@ struct RoburTodayView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 22) {
           header
+          HStack(alignment: .top, spacing: 12) {
+            ScoreTile(title: "Recovery", value: snapshot.sleepMinutes > 0 || snapshot.restingHeartRateBpm > 0 || snapshot.heartRateVariabilityMs > 0 ? snapshot.recoveryScore : nil, tint: RoburStyle.teal)
+            ScoreTile(title: "Weekly load", value: healthKit.hasHealthData ? snapshot.trainingLoad : nil, tint: RoburStyle.blue)
+          }
+          vitals.roburCard()
+          recommendation.roburCard()
+          week.roburCard()
+          if let visit = journal.activeVisit {
+            Label("Checked in at \(journal.gymName(visit.gymID) ?? "your gym")", systemImage: "mappin.and.ellipse")
+              .font(.headline).foregroundStyle(RoburStyle.teal).roburCard()
+          }
+          if !healthKit.workouts.isEmpty {
+            Text("RECENT SESSIONS").font(.caption.bold()).foregroundStyle(.secondary)
+            ForEach(Array(healthKit.workouts.prefix(3))) { workout in
+              Button { selected = workout } label: {
+                WorkoutRow(workout: workout, annotation: journal.annotations[workout.id] ?? WorkoutAnnotation(),
+                           gymName: journal.gymName(journal.annotations[workout.id]?.gymID))
+              }.buttonStyle(.plain)
+            }
+          }
           permissionPrompts
-          Divider()
-          scores
-          vitals
-          Divider()
-          recommendation
-          Divider()
-          week
-          Divider()
           VStack(alignment: .leading, spacing: 8) {
             Text("Your privacy")
               .font(.headline)
-            Text("Your Health data stays on this device. Robur does not upload it, track you, or require an account. Manage access in Apple Health under your profile, Apps and Services, Robur.")
-            Text("Recovery and training load are general fitness estimates, not medical advice. Adjust activity to how you feel.")
+            Text("Your Health data, workout notes and saved places stay on this device. Manage Health access in the Health app under your profile, Apps and Services, Robur.")
+            Text("Recovery and training load are general fitness estimates, not medical advice. Weekly load uses activity volume; effort load in Progress uses your own ratings. Adjust activity to how you feel.")
           }
           .font(.footnote)
           .foregroundStyle(.secondary)
@@ -45,8 +59,8 @@ struct RoburTodayView: View {
         .padding()
       }
       .refreshable { await healthKit.refreshTodaySnapshot() }
-      .background(Color(red: 0.95, green: 0.97, blue: 0.95))
-      .navigationTitle(RoburData.appName)
+      .background(RoburStyle.background)
+      .navigationTitle(RoburData.appName).navigationBarTitleDisplayMode(.inline)
       .toolbar {
         Button {
           if healthKit.authorizationRequested {
@@ -62,45 +76,37 @@ struct RoburTodayView: View {
         .accessibilityLabel(healthKit.authorizationRequested ? "Refresh Apple Health" : "Connect Apple Health")
       }
       .task {
-        await healthKit.refreshTodaySnapshot()
+        if healthKit.lastUpdated == nil { await healthKit.refreshTodaySnapshot() }
       }
+      .sheet(item: $selected) { WorkoutDetailView(workout: $0) }
     }
   }
 
   private var header: some View {
-    VStack(alignment: .leading, spacing: 5) {
-      Text("TODAY")
-        .font(.system(size: 38, weight: .black, design: .rounded))
-      Text(healthKit.statusText)
-        .font(.subheadline.weight(.semibold))
-        .foregroundStyle(.secondary)
+    VStack(alignment: .leading, spacing: 12) {
+      Text(Date().formatted(.dateTime.weekday(.wide).month(.abbreviated).day()).uppercased())
+        .font(.caption.weight(.semibold)).tracking(2).foregroundStyle(.white.opacity(0.8))
+      Text("Stronger,\none session at a time.")
+        .font(.system(.largeTitle, design: .rounded, weight: .bold)).fixedSize(horizontal: false, vertical: true)
+      Label("Train with intention. Recover with confidence.", systemImage: "leaf")
+        .font(.subheadline).foregroundStyle(.white.opacity(0.85))
     }
+    .padding(24).frame(maxWidth: .infinity, alignment: .leading).foregroundStyle(.white)
+    .background(LinearGradient(colors: [Color(red: 0.08, green: 0.18, blue: 0.29), Color(red: 0.05, green: 0.35, blue: 0.38)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 28))
   }
 
   private var permissionPrompts: some View {
     VStack(spacing: 12) {
       PermissionCard(
         systemImage: "heart.text.square.fill",
-        title: healthKit.promptTitle,
+        title: "Apple Health",
         message: healthKit.promptMessage,
-        buttonTitle: healthKit.authorizationRequested ? "Refresh Health Data" : "Connect",
-        tint: .green
+        buttonTitle: healthKit.authorizationRequested ? "Access" : "Connect",
+        tint: RoburStyle.teal
       ) {
-        if healthKit.authorizationRequested {
-          Task {
-            await healthKit.refreshTodaySnapshot()
-          }
-        } else {
-          healthKit.requestAuthorization()
-        }
+        healthKit.requestAuthorization()
       }
-    }
-  }
-
-  private var scores: some View {
-    VStack(spacing: 18) {
-      ScoreRow(title: "Recovery", value: snapshot.recoveryScore)
-      ScoreRow(title: "Training load", value: snapshot.trainingLoad)
     }
   }
 
@@ -116,7 +122,7 @@ struct RoburTodayView: View {
     VStack(alignment: .leading, spacing: 8) {
       Text("TODAY'S RECOMMENDATION")
         .font(.caption.bold())
-        .foregroundStyle(.green)
+        .foregroundStyle(RoburStyle.teal)
       Text(snapshot.recommendation.title)
         .font(.title2.bold())
       Text(snapshot.recommendation.prescription)
@@ -133,7 +139,7 @@ struct RoburTodayView: View {
     VStack(alignment: .leading, spacing: 12) {
       Text("THIS WEEK")
         .font(.caption.bold())
-        .foregroundStyle(.green)
+        .foregroundStyle(RoburStyle.teal)
       DataRow(title: "Running", value: String(format: "%.1f km", snapshot.week.runningKm))
       DataRow(title: "Cycling", value: String(format: "%.0f km", snapshot.week.cyclingKm))
       DataRow(title: "Strength", value: "\(snapshot.week.strengthSessions) sessions")
@@ -150,22 +156,25 @@ struct RoburTodayView: View {
   }
 }
 
-struct ScoreRow: View {
+struct ScoreTile: View {
   let title: String
-  let value: Int
-
+  let value: Int?
+  let tint: Color
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack {
-        Text(title)
-          .foregroundStyle(.secondary)
-        Spacer()
-        Text("\(value)")
-          .font(.headline)
-      }
-      ProgressView(value: Double(value), total: 100)
-        .tint(.green)
-    }
+    VStack(alignment: .leading, spacing: 14) {
+      Text(title).font(.subheadline.bold())
+      ZStack {
+        Circle().stroke(tint.opacity(0.12), lineWidth: 9)
+        Circle().trim(from: 0, to: Double(value ?? 0) / 100)
+          .stroke(tint, style: StrokeStyle(lineWidth: 9, lineCap: .round)).rotationEffect(.degrees(-90))
+        VStack(spacing: 0) {
+          Text(value.map(String.init) ?? "—").font(.system(.title, design: .rounded, weight: .bold)).monospacedDigit()
+          Text(value == nil ? "No data" : "of 100").font(.caption2).foregroundStyle(.secondary)
+        }
+      }.frame(width: 90, height: 90).padding(.vertical, 4).frame(maxWidth: .infinity)
+    }.roburCard()
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("\(title): \(value.map { "\($0) out of 100" } ?? "No data")")
   }
 }
 
@@ -215,7 +224,7 @@ struct PermissionCard: View {
         .tint(tint)
     }
     .padding()
-    .background(Color.white)
-    .clipShape(RoundedRectangle(cornerRadius: 8))
+    .background(RoburStyle.surface)
+    .clipShape(RoundedRectangle(cornerRadius: 24))
   }
 }

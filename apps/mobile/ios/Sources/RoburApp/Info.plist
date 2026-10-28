@@ -24,10 +24,12 @@
   <false/>
   <key>LSRequiresIPhoneOS</key>
   <true/>
+  <key>NSLocationWhenInUseUsageDescription</key>
+  <string>Robur uses your current position when you ask to save a fitness centre or find a nearby saved gym for check-in.</string>
   <key>NSHealthUpdateUsageDescription</key>
   <string>Robur uses HealthKit to personalize training recommendations. This version only reads your health data and does not save or change it.</string>
   <key>NSHealthShareUsageDescription</key>
-  <string>Robur reads your workouts, sleep, resting heart rate, heart rate variability, running workout distance, and cycling distance to personalize a training recommendation.</string>
+  <string>Robur reads workouts, sleep, heart rate, heart rate variability, distances, active energy and cardio fitness to show training recommendations and fitness trends over the history you choose to share.</string>
   <key>UIApplicationSceneManifest</key>
   <dict>
     <key>UIApplicationSupportsMultipleScenes</key>
