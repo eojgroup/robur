@@ -41,6 +41,11 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Test TestFlight API resilience
+        run: |
+          gem install minitest --version 5.25.5 --no-document
+          ruby apps/mobile/ios/Tests/ReleaseTests/app_store_connect_http_test.rb
+
       - name: Generate project
         working-directory: apps/mobile/ios
         run: ruby generate_xcodeproj.rb
@@ -98,6 +103,15 @@ jobs:
             -only-testing:RoburTests \
             test 2>&1 | tee "$RUNNER_TEMP/robur-tests.log"
 
+      - name: Collect simulator screen previews
+        if: always()
+        shell: bash
+        run: |
+          app_data="$(xcrun simctl get_app_container booted com.eojgroup.robur data 2>/dev/null || true)"
+          if [[ -n "$app_data" && -d "$app_data/tmp/robur-previews" ]]; then
+            cp -R "$app_data/tmp/robur-previews" "$RUNNER_TEMP/robur-previews"
+          fi
+
       - name: Upload simulator test diagnostics
         if: always()
         uses: actions/upload-artifact@v7
@@ -106,6 +120,7 @@ jobs:
           path: |
             ${{ runner.temp }}/robur-tests.log
             ${{ runner.temp }}/RoburTests.xcresult
+            ${{ runner.temp }}/robur-previews
           if-no-files-found: warn
           retention-days: 14
 

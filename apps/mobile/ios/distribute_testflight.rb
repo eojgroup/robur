@@ -11,7 +11,7 @@ require "net/http"
 require "openssl"
 require "uri"
 
-API_ROOT = "https://api.appstoreconnect.apple.com"
+require_relative "app_store_connect_http"
 
 def required_environment(name)
   value = ENV[name].to_s.strip
@@ -41,20 +41,7 @@ def app_store_connect_jwt(key_id:, issuer_id:, private_key_path:)
 end
 
 def request_json(method, path, token, body: nil)
-  uri = URI.join(API_ROOT, path)
-  request = (method == :post ? Net::HTTP::Post : Net::HTTP::Get).new(uri)
-  request["Authorization"] = "Bearer #{token}"
-  request["Content-Type"] = "application/json"
-  request.body = JSON.generate(body) if body
-
-  response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true, open_timeout: 15, read_timeout: 60) { |http| http.request(request) }
-  return {} if response.code.to_i == 204
-
-  parsed = JSON.parse(response.body.empty? ? "{}" : response.body)
-  return parsed if response.code.to_i.between?(200, 299)
-
-  details = parsed.fetch("errors", parsed).to_json
-  abort "App Store Connect #{method.to_s.upcase} #{path} failed (HTTP #{response.code}): #{details}"
+  AppStoreConnectHTTP.new.request(method, path, token, body: body)
 end
 
 key_id = required_environment("APP_STORE_CONNECT_KEY_ID")
