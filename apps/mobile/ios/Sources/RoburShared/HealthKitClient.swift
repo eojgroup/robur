@@ -355,6 +355,15 @@ private struct WeeklyWorkoutMetrics {
 
 #if os(iOS)
 extension HealthKitClient {
+  #if DEBUG
+  // Explicitly injected data for simulator presentation tests; the app uses the default initializer.
+  convenience init(previewWorkouts: [WorkoutRecord], previewReadings: [FitnessReading], defaults: UserDefaults) {
+    self.init(defaults: defaults)
+    workouts = previewWorkouts
+    fitnessReadings = previewReadings
+  }
+  #endif
+
   func loadHistory(range: HistoryRange) async {
     guard authorizationRequested, HKHealthStore.isHealthDataAvailable() else { return }
     if isLoadingHistory && range == historyRange { return }

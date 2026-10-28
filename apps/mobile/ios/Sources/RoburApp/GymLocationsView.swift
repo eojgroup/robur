@@ -192,6 +192,12 @@ struct GymLocationsView: View {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { adding = false } }
         ToolbarItem(placement: .confirmationAction) {
           Button("Save") {
+            if savePosition {
+              guard let fix = locator.location, abs(fix.timestamp.timeIntervalSinceNow) < 120 else {
+                locator.locate()
+                return
+              }
+            }
             let position = savePosition ? locator.location : nil
             if journal.addGym(name: name, latitude: position?.coordinate.latitude, longitude: position?.coordinate.longitude) {
               adding = false

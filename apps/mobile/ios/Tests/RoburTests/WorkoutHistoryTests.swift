@@ -53,7 +53,7 @@ final class WorkoutHistoryTests: XCTestCase {
   }
 
   @MainActor
-  func testJournalRoundTripAndVisitSuggestion() throws {
+  func testJournalRoundTripAndVisitSuggestion() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let url = directory.appendingPathComponent("journal.json")
@@ -78,7 +78,7 @@ final class WorkoutHistoryTests: XCTestCase {
   }
 
   @MainActor
-  func testCorruptJournalIsPreserved() throws {
+  func testCorruptJournalIsPreserved() async throws {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: url) }
     let original = Data("invalid journal".utf8)
