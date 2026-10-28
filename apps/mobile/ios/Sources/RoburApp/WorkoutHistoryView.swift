@@ -60,6 +60,9 @@ struct WorkoutHistoryView: View {
       .searchable(text: $search, prompt: "Workout, muscle, place or notes")
       .refreshable { await healthKit.loadHistory(range: healthKit.historyRange) }
       .sheet(item: $selected) { WorkoutDetailView(workout: $0) }
+      .onChange(of: journal.gyms) { _, gyms in
+        if let gymID, !gyms.contains(where: { $0.id == gymID }) { self.gymID = nil }
+      }
     }
   }
 }

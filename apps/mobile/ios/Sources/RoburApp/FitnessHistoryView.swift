@@ -8,6 +8,7 @@ struct FitnessHistoryView: View {
   @State private var showLoad = false
   @State private var selectedDate: Date?
   @State private var showingPeriod = false
+  @State private var selectedWorkout: WorkoutRecord?
 
   private var monthly: Bool { healthKit.historyRange == .all || healthKit.historyRange == .year }
   private var buckets: [HistoryBucket] {
@@ -72,7 +73,7 @@ struct FitnessHistoryView: View {
       .sheet(isPresented: $showingPeriod) {
         NavigationStack {
           List(periodWorkouts) { workout in
-            NavigationLink { WorkoutDetailView(workout: workout) } label: {
+            Button { selectedWorkout = workout } label: {
               Label {
                 VStack(alignment: .leading) {
                   Text(workout.title)
@@ -82,6 +83,7 @@ struct FitnessHistoryView: View {
             }
           }.navigationTitle("Period workouts")
             .toolbar { Button("Done") { showingPeriod = false } }
+            .sheet(item: $selectedWorkout) { WorkoutDetailView(workout: $0) }
         }
       }
     }
