@@ -41,6 +41,11 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Test TestFlight API resilience
+        run: |
+          gem install minitest --version 5.25.5 --no-document
+          ruby apps/mobile/ios/Tests/ReleaseTests/app_store_connect_http_test.rb
+
       - name: Generate project
         working-directory: apps/mobile/ios
         run: ruby generate_xcodeproj.rb
