@@ -92,7 +92,11 @@ final class GymMonitor: NSObject, ObservableObject, CLLocationManagerDelegate {
       let radius = min(200, manager.maximumRegionMonitoringDistance)
       guard radius > 0 else { continue }
       if let current = existing.first(where: { $0.identifier == identifier }) as? CLCircularRegion {
-        if current.center.latitude == latitude && current.center.longitude == longitude && current.radius == radius { continue }
+        if current.center.latitude == latitude && current.center.longitude == longitude && current.radius == radius {
+          // Reconcile missed exits after suspension or a force-quit when the app next opens.
+          manager.requestState(for: current)
+          continue
+        }
         manager.stopMonitoring(for: current)
       }
       let region = CLCircularRegion(center: CLLocationCoordinate2D(latitude: latitude, longitude: longitude),
