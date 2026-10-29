@@ -14,6 +14,12 @@ final class HealthKitClient: ObservableObject {
   #if os(iOS)
   @Published private(set) var workouts: [WorkoutRecord] = []
   @Published private(set) var fitnessReadings: [FitnessReading] = []
+  @Published private(set) var dailyMetrics: [DailyHealthMetrics] = []
+  @Published private(set) var profile = HealthProfile()
+  @Published private(set) var workoutDetailsLoading: Set<String> = []
+  @Published private(set) var workoutDetailsError: String?
+  private var rawWorkouts: [String: HKWorkout] = [:]
+  private var loadedWorkoutDetails: Set<String> = []
   @Published private(set) var historyRange: HistoryRange = .quarter
   @Published private(set) var isLoadingHistory = false
   @Published private(set) var historyError: String?
@@ -57,10 +63,10 @@ final class HealthKitClient: ObservableObject {
 
   var promptMessage: String {
     if authorizationRequested {
-      return "Robur reads approved Health data on this device. Use Access to share newly supported cardio fitness, heart rate and active energy. Manage existing permissions and history in the Health app."
+      return "Robur reads approved Health data on this device. Use Access to share effort, steps, exercise, stand time, body measurements and other newly supported categories. Manage existing permissions and history in the Health app."
     }
 
-    return "Robur reads workouts, sleep, heart rate, HRV, active energy, distances and cardio fitness to show your training and progress. Choose which categories and history to share."
+    return "Robur reads workouts, Fitness effort, sleep, heart metrics, steps, exercise, stand time, body measurements and shared profile information to show your training and progress. Choose which categories and history to share."
   }
 
   func requestAuthorization() {
@@ -120,7 +126,22 @@ final class HealthKitClient: ObservableObject {
     #if os(iOS)
     types.insert(HKObjectType.quantityType(forIdentifier: .heartRate)!)
     types.insert(HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!)
-    types.insert(HKObjectType.quantityType(forIdentifier: .vo2Max)!)
+    let quantityIdentifiers: [HKQuantityTypeIdentifier] = [
+      .vo2Max, .stepCount, .appleExerciseTime, .appleStandTime, .bodyMass,
+      .height, .bodyMassIndex, .bodyFatPercentage, .respiratoryRate, .oxygenSaturation,
+      .distanceWalkingRunning, .runningStrideLength
+    ]
+    for identifier in quantityIdentifiers {
+      if let type = HKObjectType.quantityType(forIdentifier: identifier) { types.insert(type) }
+    }
+    let characteristics: [HKCharacteristicTypeIdentifier] = [.dateOfBirth, .biologicalSex, .bloodType]
+    for identifier in characteristics {
+      if let type = HKObjectType.characteristicType(forIdentifier: identifier) { types.insert(type) }
+    }
+    if #available(iOS 18.0, *) {
+      types.insert(HKObjectType.quantityType(forIdentifier: .workoutEffortScore)!)
+      types.insert(HKObjectType.quantityType(forIdentifier: .estimatedWorkoutEffortScore)!)
+    }
     #endif
     return types
   }
@@ -357,41 +378,48 @@ private struct WeeklyWorkoutMetrics {
 extension HealthKitClient {
   #if DEBUG
   // Explicitly injected data for simulator presentation tests; the app uses the default initializer.
-  convenience init(previewWorkouts: [WorkoutRecord], previewReadings: [FitnessReading], defaults: UserDefaults) {
+  convenience init(previewWorkouts: [WorkoutRecord], previewReadings: [FitnessReading], defaults: UserDefaults,
+                   previewDays: [DailyHealthMetrics] = [], previewProfile: HealthProfile = HealthProfile()) {
     self.init(defaults: defaults)
     workouts = previewWorkouts
     fitnessReadings = previewReadings
+    dailyMetrics = previewDays
+    profile = previewProfile
   }
   #endif
 
   func loadHistory(range: HistoryRange) async {
     guard authorizationRequested, HKHealthStore.isHealthDataAvailable() else { return }
     if isLoadingHistory && range == historyRange { return }
-    if historyRange != range {
-      workouts = []
-      fitnessReadings = []
-    }
+    if historyRange != range { workouts = []; fitnessReadings = [] }
     historyRange = range
     let request = UUID()
     historyRequest = request
     isLoadingHistory = true
     historyError = nil
     defer { if historyRequest == request { isLoadingHistory = false } }
-    let start = range.startDate() ?? store.earliestPermittedSampleDate()
-    let end = Date()
+    let now = Date()
+    let visibleStart = range.startDate(now: now) ?? store.earliestPermittedSampleDate()
+    // Analytics always retain enough data for independent 7/28/30/90-day baselines.
+    let baselineStart = Calendar.current.date(byAdding: .day, value: -91, to: now) ?? visibleStart
+    let healthStart = min(visibleStart, baselineStart)
     do {
-      async let workoutSamples = historySamples(type: HKObjectType.workoutType(), start: start, end: end)
-      async let cardio = historyReadings(identifier: .vo2Max, metric: .cardio,
-        unit: HKUnit(from: "ml/kg*min"), start: start, end: end)
-      async let resting = historyReadings(identifier: .restingHeartRate, metric: .restingHR,
-        unit: HKUnit.count().unitDivided(by: .minute()), start: start, end: end)
-      async let variability = historyReadings(identifier: .heartRateVariabilitySDNN, metric: .hrv,
-        unit: .secondUnit(with: .milli), start: start, end: end)
+      async let workoutSamples = historySamples(type: HKObjectType.workoutType(), start: healthStart, end: now)
+      async let healthHistory = readDailyHealth(from: healthStart, to: now)
+      async let userProfile = readProfile(now: now)
+      async let effort = readWorkoutEffort()
       let samples = try await workoutSamples
-      let readings = try await cardio + resting + variability
+      let history = await healthHistory
+      let profileResult = await userProfile
+      let effortScores = await effort
       guard historyRequest == request else { return }
-      workouts = samples.compactMap { sample in
-        guard let workout = sample as? HKWorkout else { return nil }
+      let imported = samples.compactMap { $0 as? HKWorkout }
+      let recentHeart = await readRecentWorkoutHeartRates(imported, now: now)
+      guard historyRequest == request else { return }
+      rawWorkouts = Dictionary(uniqueKeysWithValues: imported.map { ($0.uuid.uuidString, $0) })
+      loadedWorkoutDetails = []
+      // The shortest journal range still includes the full 28-day training-load window.
+      workouts = imported.filter { $0.startDate >= visibleStart }.map { workout in
         let heartType = HKQuantityType.quantityType(forIdentifier: .heartRate)!
         let energyType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned)!
         let info = Self.workoutPresentation(workout.workoutActivityType)
@@ -400,17 +428,258 @@ extension HealthKitClient {
           distanceKm: workout.totalDistance?.doubleValue(for: .meterUnit(with: .kilo)),
           energyKcal: workout.statistics(for: energyType)?.sumQuantity()?.doubleValue(for: .kilocalorie()),
           averageHeartRate: workout.statistics(for: heartType)?.averageQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())),
-          source: workout.sourceRevision.source.name)
+          source: workout.sourceRevision.source.name, appleEffort: effortScores[workout.uuid.uuidString],
+          heartRateSamples: recentHeart[workout.uuid.uuidString] ?? [])
       }
-      fitnessReadings = readings.sorted { $0.date < $1.date }
+      fitnessReadings = history.readings.filter { $0.date >= Calendar.current.startOfDay(for: visibleStart) }
+      dailyMetrics = history.days
+      profile = profileResult
     } catch {
       guard historyRequest == request else { return }
       historyError = "Unable to load history: \(error.localizedDescription). Pull to refresh to retry."
     }
   }
 
-  private func historySamples(type: HKSampleType, start: Date, end: Date) async throws -> [HKSample] {
+  /// Uses Apple's actual workout/effort relationships, never timestamp-based guesses.
+  private func readWorkoutEffort() async -> [String: Double] {
+    guard #available(iOS 18.0, *) else { return [:] }
+    do {
+      let relationships: [HKWorkoutEffortRelationship] = try await withCheckedThrowingContinuation { continuation in
+        let query = HKWorkoutEffortRelationshipQuery(predicate: nil, anchor: nil, options: .mostRelevant) { _, relationships, _, error in
+          if let error { continuation.resume(throwing: error) }
+          else { continuation.resume(returning: relationships ?? []) }
+        }
+        store.execute(query)
+      }
+      var result: [String: Double] = [:]
+      for relationship in relationships where relationship.activity == nil {
+        let candidates = (relationship.samples ?? []).compactMap { $0 as? HKQuantitySample }
+          .filter { $0.quantityType.identifier == HKQuantityTypeIdentifier.workoutEffortScore.rawValue ||
+            $0.quantityType.identifier == HKQuantityTypeIdentifier.estimatedWorkoutEffortScore.rawValue }
+          .sorted { $0.endDate > $1.endDate }
+        let actual = candidates.first { $0.quantityType.identifier == HKQuantityTypeIdentifier.workoutEffortScore.rawValue }
+        let sample = actual ?? candidates.first
+        if let score = sample?.quantity.doubleValue(for: .appleEffortScore()), score.isFinite, (1...10).contains(score) {
+          result[relationship.workout.uuid.uuidString] = score
+        }
+      }
+      return result
+    } catch {
+      // Denied/new data categories must not hide previously approved workout history.
+      return [:]
+    }
+  }
+
+  func loadWorkoutDetails(id: String) async {
+    guard !loadedWorkoutDetails.contains(id), !workoutDetailsLoading.contains(id), let workout = rawWorkouts[id] else { return }
+    workoutDetailsLoading.insert(id)
+    defer { workoutDetailsLoading.remove(id) }
+    workoutDetailsError = nil
+    do {
+      let associated = HKQuery.predicateForObjects(from: workout)
+      async let heart = try? associatedSamples(identifier: .heartRate, predicate: associated)
+      async let steps = try? associatedSamples(identifier: .stepCount, predicate: associated)
+      async let distances = try? associatedSamples(identifier: workout.workoutActivityType == .cycling ? .distanceCycling : .distanceWalkingRunning, predicate: associated)
+      let heartResult = await heart
+      let stepsResult = await steps
+      let distanceResult = await distances
+      let heartSamples = heartResult ?? []
+      let stepSamples = stepsResult ?? []
+      let distanceSamples = distanceResult ?? []
+      let bpm = HKUnit.count().unitDivided(by: .minute())
+      let heartValues = heartSamples.map { WorkoutHeartSample(date: $0.startDate, bpm: $0.quantity.doubleValue(for: bpm)) }
+      let totalSteps = stepSamples.reduce(0) { $0 + $1.quantity.doubleValue(for: .count()) }
+      var splits: [WorkoutSplit] = []
+      var coveredKm = 0.0
+      var splitStart = workout.startDate
+      for sample in distanceSamples {
+        let distance = sample.quantity.doubleValue(for: .meterUnit(with: .kilo))
+        guard distance > 0, sample.endDate > sample.startDate else { continue }
+        var remaining = distance
+        var cursor = sample.startDate
+        let secondsPerKm = sample.endDate.timeIntervalSince(sample.startDate) / distance
+        while coveredKm + remaining >= 1 {
+          let needed = 1 - coveredKm
+          let boundary = cursor.addingTimeInterval(needed * secondsPerKm)
+          splits.append(WorkoutSplit(index: splits.count + 1, minutes: boundary.timeIntervalSince(splitStart) / 60, distanceKm: 1))
+          splitStart = boundary
+          cursor = boundary
+          remaining -= needed
+          coveredKm = 0
+        }
+        coveredKm += remaining
+      }
+      if let index = workouts.firstIndex(where: { $0.id == id }) {
+        workouts[index].heartRateSamples = heartValues
+        workouts[index].splits = splits
+        if totalSteps > 0 && workout.duration > 0 { workouts[index].cadence = totalSteps / (workout.duration / 60) }
+      }
+      if heartResult != nil && stepsResult != nil && distanceResult != nil { loadedWorkoutDetails.insert(id) }
+      else { workoutDetailsError = "Some workout details are unavailable. Approved data is still shown; reopen to retry." }
+    }
+  }
+
+  private func readRecentWorkoutHeartRates(_ workouts: [HKWorkout], now: Date) async -> [String: [WorkoutHeartSample]] {
+    let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: now) ?? now
+    let recent = workouts.filter { $0.startDate >= cutoff }
+    guard !recent.isEmpty else { return [:] }
+    let predicate = NSCompoundPredicate(orPredicateWithSubpredicates: recent.map { HKQuery.predicateForObjects(from: $0) })
+    guard let samples = try? await associatedSamples(identifier: .heartRate, predicate: predicate) else { return [:] }
+    let unit = HKUnit.count().unitDivided(by: .minute())
+    var result: [String: [WorkoutHeartSample]] = [:]
+    for sample in samples {
+      let matches = recent.filter { sample.startDate >= $0.startDate && sample.startDate < $0.endDate }
+      // Overlapping workouts cannot safely be attributed by time after a bulk query.
+      // Their exact associations are loaded on demand when opening the workout.
+      guard matches.count == 1, let workout = matches.first else { continue }
+      let bpm = sample.quantity.doubleValue(for: unit)
+      guard bpm.isFinite, bpm > 0 else { continue }
+      result[workout.uuid.uuidString, default: []].append(WorkoutHeartSample(date: sample.startDate, bpm: bpm))
+    }
+    return result
+  }
+
+  private func associatedSamples(identifier: HKQuantityTypeIdentifier, predicate: NSPredicate) async throws -> [HKQuantitySample] {
+    guard let type = HKQuantityType.quantityType(forIdentifier: identifier) else { return [] }
+    return try await withCheckedThrowingContinuation { continuation in
+      let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit,
+        sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)]) { _, samples, error in
+        if let error { continuation.resume(throwing: error) }
+        else { continuation.resume(returning: (samples ?? []).compactMap { $0 as? HKQuantitySample }) }
+      }
+      store.execute(query)
+    }
+  }
+
+  private struct DailyQuantitySpec {
+    let metric: FitnessMetric
+    let identifier: HKQuantityTypeIdentifier
+    let unit: HKUnit
+    let cumulative: Bool
+  }
+
+  private func readDailyHealth(from start: Date, to end: Date) async -> (days: [DailyHealthMetrics], readings: [FitnessReading]) {
+    let specs: [DailyQuantitySpec] = [
+      DailyQuantitySpec(metric: .steps, identifier: .stepCount, unit: .count(), cumulative: true),
+      DailyQuantitySpec(metric: .exercise, identifier: .appleExerciseTime, unit: .minute(), cumulative: true),
+      DailyQuantitySpec(metric: .stand, identifier: .appleStandTime, unit: .minute(), cumulative: true),
+      DailyQuantitySpec(metric: .energy, identifier: .activeEnergyBurned, unit: .kilocalorie(), cumulative: true),
+      DailyQuantitySpec(metric: .restingHR, identifier: .restingHeartRate, unit: HKUnit.count().unitDivided(by: .minute()), cumulative: false),
+      DailyQuantitySpec(metric: .hrv, identifier: .heartRateVariabilitySDNN, unit: .secondUnit(with: .milli), cumulative: false),
+      DailyQuantitySpec(metric: .cardio, identifier: .vo2Max, unit: HKUnit(from: "ml/kg*min"), cumulative: false),
+      DailyQuantitySpec(metric: .weight, identifier: .bodyMass, unit: .gramUnit(with: .kilo), cumulative: false),
+      DailyQuantitySpec(metric: .bodyFat, identifier: .bodyFatPercentage, unit: .percent(), cumulative: false),
+      DailyQuantitySpec(metric: .bmi, identifier: .bodyMassIndex, unit: .count(), cumulative: false),
+      DailyQuantitySpec(metric: .height, identifier: .height, unit: .meterUnit(with: .centi), cumulative: false),
+      DailyQuantitySpec(metric: .respiratoryRate, identifier: .respiratoryRate, unit: HKUnit.count().unitDivided(by: .minute()), cumulative: false),
+      DailyQuantitySpec(metric: .oxygenSaturation, identifier: .oxygenSaturation, unit: .percent(), cumulative: false)
+    ]
+    var values: [FitnessMetric: [Date: Double]] = [:]
+    // Ask HealthKit for consolidated cumulative statistics; never manually sum per-source totals.
+    await withTaskGroup(of: (FitnessMetric, [Date: Double]).self) { group in
+      for spec in specs {
+        group.addTask { [self] in
+          let daily = (try? await dailyQuantities(spec: spec, start: start, end: end)) ?? [:]
+          return (spec.metric, daily)
+        }
+      }
+      for await (metric, daily) in group { values[metric] = daily }
+    }
+    values[.sleep] = (try? await dailySleep(from: start, to: end)) ?? [:]
+    let calendar = Calendar.current
+    let dates = Set(values.values.flatMap { $0.keys }).sorted()
+    let days = dates.map { date in
+      DailyHealthMetrics(date: date, sleepMinutes: values[.sleep]?[date], steps: values[.steps]?[date],
+        exerciseMinutes: values[.exercise]?[date], standMinutes: values[.stand]?[date],
+        activeEnergyKcal: values[.energy]?[date], restingHR: values[.restingHR]?[date],
+        hrv: values[.hrv]?[date], vo2Max: values[.cardio]?[date], weightKg: values[.weight]?[date])
+    }
+    let readings = values.flatMap { metric, daily in
+      daily.map { date, value in
+        FitnessReading(id: "\(metric.rawValue)-\(calendar.startOfDay(for: date).timeIntervalSince1970)", date: date, value: value, metric: metric)
+      }
+    }.sorted { $0.date < $1.date }
+    return (days, readings)
+  }
+
+  private func dailyQuantities(spec: DailyQuantitySpec, start: Date, end: Date) async throws -> [Date: Double] {
+    guard let type = HKQuantityType.quantityType(forIdentifier: spec.identifier) else { return [:] }
     let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+    return try await withCheckedThrowingContinuation { continuation in
+      let query = HKStatisticsCollectionQuery(quantityType: type, quantitySamplePredicate: predicate,
+        options: spec.cumulative ? .cumulativeSum : .discreteAverage,
+        anchorDate: Calendar.current.startOfDay(for: end), intervalComponents: DateComponents(day: 1))
+      query.initialResultsHandler = { _, collection, error in
+        if let error { continuation.resume(throwing: error); return }
+        var result: [Date: Double] = [:]
+        collection?.enumerateStatistics(from: start, to: end) { statistics, _ in
+          let quantity = spec.cumulative ? statistics.sumQuantity() : statistics.averageQuantity()
+          if var value = quantity?.doubleValue(for: spec.unit), value.isFinite, value >= 0 {
+            if spec.metric == .bodyFat || spec.metric == .oxygenSaturation { value *= 100 }
+            result[statistics.startDate] = value
+          }
+        }
+        continuation.resume(returning: result)
+      }
+      store.execute(query)
+    }
+  }
+
+  private func dailySleep(from start: Date, to end: Date) async throws -> [Date: Double] {
+    let samples = try await historySamples(type: HKObjectType.categoryType(forIdentifier: .sleepAnalysis)!, start: start, end: end, options: [])
+    let asleep: Set<Int> = [HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue,
+      HKCategoryValueSleepAnalysis.asleepCore.rawValue, HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
+      HKCategoryValueSleepAnalysis.asleepREM.rawValue]
+    let intervals = samples.compactMap { sample -> DateInterval? in
+      guard let sample = sample as? HKCategorySample, asleep.contains(sample.value) else { return nil }
+      let clippedStart = max(start, sample.startDate)
+      let clippedEnd = min(end, sample.endDate)
+      return clippedEnd > clippedStart ? DateInterval(start: clippedStart, end: clippedEnd) : nil
+    }
+    return HealthImportMath.sleepMinutes(intervals: intervals, calendar: .current)
+  }
+
+  private func readProfile(now: Date) async -> HealthProfile {
+    let start = store.earliestPermittedSampleDate()
+    async let weight = try? latestQuantity(identifier: .bodyMass, unit: .gramUnit(with: .kilo), start: start, end: now)
+    async let height = try? latestQuantity(identifier: .height, unit: .meterUnit(with: .centi), start: start, end: now)
+    async let fat = try? latestQuantity(identifier: .bodyFatPercentage, unit: .percent(), start: start, end: now)
+    async let bmi = try? latestQuantity(identifier: .bodyMassIndex, unit: .count(), start: start, end: now)
+    var result = HealthProfile()
+    if let birth = try? store.dateOfBirthComponents(), birth.year != nil, birth.month != nil, birth.day != nil,
+       let date = Calendar.current.date(from: birth) {
+      result.age = Calendar.current.dateComponents([.year], from: date, to: now).year
+    }
+    if let sex = try? store.biologicalSex().biologicalSex {
+      switch sex {
+      case .female: result.biologicalSex = "Female"
+      case .male: result.biologicalSex = "Male"
+      case .other: result.biologicalSex = "Other"
+      default: break
+      }
+    }
+    if let blood = try? store.bloodType().bloodType {
+      switch blood {
+      case .aPositive: result.bloodType = "A+"
+      case .aNegative: result.bloodType = "A−"
+      case .bPositive: result.bloodType = "B+"
+      case .bNegative: result.bloodType = "B−"
+      case .abPositive: result.bloodType = "AB+"
+      case .abNegative: result.bloodType = "AB−"
+      case .oPositive: result.bloodType = "O+"
+      case .oNegative: result.bloodType = "O−"
+      default: break
+      }
+    }
+    result.weightKg = await weight
+    result.heightCm = await height
+    result.bodyFatPercent = (await fat).map { $0 * 100 }
+    result.bmi = await bmi
+    return result
+  }
+
+  private func historySamples(type: HKSampleType, start: Date, end: Date, options: HKQueryOptions = .strictStartDate) async throws -> [HKSample] {
+    let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: options)
     return try await withCheckedThrowingContinuation { continuation in
       let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit,
         sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)]) { _, samples, error in

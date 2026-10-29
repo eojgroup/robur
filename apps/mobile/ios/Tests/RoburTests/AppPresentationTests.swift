@@ -17,13 +17,21 @@ final class AppPresentationTests: XCTestCase {
       return WorkoutRecord(id: "preview-\(index)", start: start, end: start.addingTimeInterval(2700),
         title: index.isMultiple(of: 2) ? "Strength" : "Run", symbol: index.isMultiple(of: 2) ? "dumbbell.fill" : "figure.run",
         minutes: 45, distanceKm: index.isMultiple(of: 2) ? nil : 6.5, energyKcal: 320,
-        averageHeartRate: 135, source: "Presentation test")
+        averageHeartRate: 135, source: "Presentation test", appleEffort: Double(5 + index % 4),
+        heartRateSamples: (0..<45).map { minute in WorkoutHeartSample(date: start.addingTimeInterval(Double(minute) * 60), bpm: 115 + Double(minute % 40)) })
     }
     let readings = (0..<40).map { index -> FitnessReading in
       let date = Calendar.current.date(byAdding: .day, value: -(index + 1), to: now)!
       return FitnessReading(id: "preview-\(index)", date: date, value: 46 - Double(index) * 0.08, metric: .cardio)
     }
-    let health = HealthKitClient(previewWorkouts: workouts, previewReadings: readings, defaults: defaults)
+    let days = (0..<91).map { index -> DailyHealthMetrics in
+      let date = Calendar.current.startOfDay(for: Calendar.current.date(byAdding: .day, value: -index, to: now)!)
+      return DailyHealthMetrics(date: date, sleepMinutes: 430 + Double(index % 30), steps: 7000 + Double((index * 211) % 4000),
+        exerciseMinutes: 25 + Double(index % 30), standMinutes: 90 + Double(index % 20), activeEnergyKcal: 450 + Double(index % 100),
+        restingHR: 54 + Double(index % 5), hrv: 55 + Double(index % 10), vo2Max: 46 - Double(index) * 0.02, weightKg: 78 + Double(index) * 0.01)
+    }
+    let health = HealthKitClient(previewWorkouts: workouts, previewReadings: readings, defaults: defaults,
+      previewDays: days, previewProfile: HealthProfile(age: 35, biologicalSex: "Male", bloodType: "A+", heightCm: 180, weightKg: 78, bodyFatPercent: 19, bmi: 24.1))
     let journal = WorkoutJournal(url: directory.appendingPathComponent("journal.json"))
     XCTAssertTrue(journal.addGym(name: "Riverside Fitness"))
     for workout in workouts {

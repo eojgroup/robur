@@ -31,13 +31,7 @@ struct RoburTodayView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 22) {
           header
-          HStack(alignment: .top, spacing: 12) {
-            ScoreTile(title: "Recovery", value: snapshot.sleepMinutes > 0 || snapshot.restingHeartRateBpm > 0 || snapshot.heartRateVariabilityMs > 0 ? snapshot.recoveryScore : nil, tint: RoburStyle.teal)
-            ScoreTile(title: "Weekly load", value: healthKit.hasHealthData ? snapshot.trainingLoad : nil, tint: RoburStyle.blue)
-          }
-          vitals.roburCard()
-          recommendation.roburCard()
-          week.roburCard()
+          HealthOverviewView()
           if let visit = journal.activeVisit {
             Label("Checked in at \(journal.gymName(visit.gymID) ?? "your gym")", systemImage: "mappin.and.ellipse")
               .font(.headline).foregroundStyle(RoburStyle.teal).roburCard()
@@ -56,7 +50,7 @@ struct RoburTodayView: View {
             Text("Your privacy")
               .font(.headline)
             Text("Your Health data, workout notes and saved places stay on this device. Manage Health access in the Health app under your profile, Apps and Services, Robur.")
-            Text("Recovery and training load are general fitness estimates, not medical advice. Weekly load uses activity volume; effort load in Progress uses your own ratings. Adjust activity to how you feel.")
+            Text("Recovery and training load are general fitness estimates, not medical advice. Scores use your personal baseline and available Health measurements. Effort prefers Apple Fitness records, with clearly labeled fallbacks. Adjust activity to how you feel.")
           }
           .font(.footnote)
           .foregroundStyle(.secondary)
@@ -67,6 +61,8 @@ struct RoburTodayView: View {
       .background(RoburStyle.background)
       .navigationTitle(RoburData.appName).navigationBarTitleDisplayMode(.inline)
       .toolbar {
+        NavigationLink { HealthSettingsView() } label: { Image(systemName: "slider.horizontal.3") }
+          .accessibilityLabel("Goals and notifications")
         Button {
           if healthKit.authorizationRequested {
             Task {
@@ -84,6 +80,13 @@ struct RoburTodayView: View {
         if healthKit.lastUpdated == nil { await healthKit.refreshTodaySnapshot() }
       }
       .sheet(item: $selected) { WorkoutDetailView(workout: $0) }
+      .onChange(of: healthKit.dailyMetrics) { _, days in
+        let defaults = UserDefaults.standard
+        let summary = TrainingInsights.make(days: days, workouts: healthKit.workouts,
+          annotations: journal.annotations, maxHR: defaults.object(forKey: "RoburMaxHeartRate") as? Double ?? 190)
+        Task { await HealthNotificationManager.shared.evaluate(summary: summary, days: days,
+          stepsGoal: defaults.object(forKey: "RoburStepsGoal") as? Double ?? 8000) }
+      }
     }
   }
 

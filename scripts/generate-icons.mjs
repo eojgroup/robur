@@ -66,34 +66,36 @@ function lerp(a, b, t) {
 
 function png(width, height) {
   const raw = Buffer.alloc((width * 3 + 1) * height);
-  const cx = width * 0.5;
-  const cy = height * 0.5;
-  const radius = width * 0.3;
-
+  // An opaque, anti-aliased R monogram with an oak-leaf accent. iOS supplies
+  // the rounded icon mask; retaining full square corners avoids double masks.
+  const samples = [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]];
+  const segmentDistance = (x, y, ax, ay, bx, by) => {
+    const dx = bx - ax, dy = by - ay;
+    const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)));
+    return Math.hypot(x - ax - t * dx, y - ay - t * dy);
+  };
   for (let y = 0; y < height; y += 1) {
     const row = y * (width * 3 + 1);
     raw[row] = 0;
-
     for (let x = 0; x < width; x += 1) {
-      const t = (x + y) / (width + height);
-      const dx = x - cx;
-      const dy = y - cy;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const band = Math.abs(dist - radius) < width * 0.035;
-      const bar = Math.abs(x - cx) < width * 0.045 || Math.abs(y - cy) < height * 0.045;
+      const rgb = [0, 0, 0];
+      for (const [sx, sy] of samples) {
+        const u = (x + sx) / width, v = (y + sy) / height;
+        const glow = Math.max(0, 1 - Math.hypot(u - 0.92, v - 0.95) / 1.2);
+        const bg = [lerp(10, 15, glow), lerp(22, 74, glow), lerp(39, 79, glow)];
+        const stem = segmentDistance(u, v, 0.32, 0.28, 0.32, 0.74) <= 0.043;
+        const ellipse = Math.hypot((u - 0.455) / 0.19, (v - 0.405) / 0.155);
+        const bow = u >= 0.32 && Math.abs(ellipse - 1) <= 0.22;
+        const leg = segmentDistance(u, v, 0.47, 0.54, 0.685, 0.74) <= 0.043;
+        const leafX = (u - 0.73) * 0.8 - (v - 0.235) * 0.6;
+        const leafY = (u - 0.73) * 0.6 + (v - 0.235) * 0.8;
+        const leaf = (leafX * leafX / 0.0049 + leafY * leafY / 0.000625) <= 1;
+        const mark = stem || bow || leg;
+        const ink = leaf ? [105, 231, 191] : mark ? [lerp(239, 100, v), lerp(255, 228, v), lerp(252, 212, v)] : bg;
+        for (let c = 0; c < 3; c += 1) rgb[c] += ink[c] / samples.length;
+      }
       const i = row + 1 + x * 3;
-
-      const bg = [
-        lerp(18, 38, t),
-        lerp(42, 76, t),
-        lerp(47, 78, t)
-      ];
-      const mark = band || bar ? [75, 211, 149] : bg;
-      const accent = dist < width * 0.08 ? [255, 111, 97] : mark;
-
-      raw[i] = accent[0];
-      raw[i + 1] = accent[1];
-      raw[i + 2] = accent[2];
+      raw[i] = Math.round(rgb[0]); raw[i + 1] = Math.round(rgb[1]); raw[i + 2] = Math.round(rgb[2]);
     }
   }
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 
 struct WorkoutHistoryView: View {
   @EnvironmentObject private var healthKit: HealthKitClient
@@ -98,70 +99,63 @@ struct WorkoutRow: View {
   @ViewBuilder private var metrics: some View {
     Label("\(Int(workout.minutes)) min", systemImage: "clock")
     if let hr = workout.averageHeartRate { Label("\(Int(hr)) bpm", systemImage: "heart") }
-    Text(annotation.effort.map { "Effort \($0)/10" } ?? "Rate effort")
+    Text(workout.appleEffort.map { String(format: "Apple effort %.1f/10", $0) }
+      ?? annotation.effort.map { "Personal effort \($0)/10" } ?? "Effort unavailable")
       .foregroundStyle(RoburStyle.amber)
   }
 }
 
 struct WorkoutDetailView: View {
   let workout: WorkoutRecord
+  @EnvironmentObject private var healthKit: HealthKitClient
   @EnvironmentObject private var journal: WorkoutJournal
   @Environment(\.dismiss) private var dismiss
+  @AppStorage("RoburMaxHeartRate") private var maxHR = 190.0
   @State private var draft = WorkoutAnnotation()
   @State private var loaded = false
+  @State private var loadingDetails = false
+
+  private var current: WorkoutRecord { healthKit.workouts.first { $0.id == workout.id } ?? workout }
+  private var zones: [HeartZoneTotal] {
+    TrainingInsights.heartZones(samples: current.heartRateSamples, end: current.end, maxHR: maxHR)
+  }
+  private var pace: Double? {
+    guard let km = current.distanceKm, km > 0 else { return nil }
+    return current.minutes / km
+  }
+  private var comparablePace: Double? {
+    let similar = healthKit.workouts.filter { item in
+      guard item.id != current.id, item.title == current.title, item.start < current.start,
+            item.start >= current.start.addingTimeInterval(-90 * 86_400),
+            let km = item.distanceKm, km > 0,
+            let currentKm = current.distanceKm, currentKm > 0 else { return false }
+      return abs(km - currentKm) / currentKm <= 0.25
+    }.prefix(10)
+    guard !similar.isEmpty else { return nil }
+    return similar.reduce(0) { $0 + $1.minutes / ($1.distanceKm ?? 1) } / Double(similar.count)
+  }
 
   var body: some View {
     NavigationStack {
       Form {
         if let error = journal.storageError { Text(error).foregroundStyle(.red) }
+        overviewSection
+        effortSection
+        analysisSection
+        if !current.heartRateSamples.isEmpty { heartRateSection }
+        if !current.splits.isEmpty { splitSection }
+        muscleSection
+        placeSection
         Section {
-          Label(workout.title, systemImage: workout.symbol).font(.title2.bold())
-          Text(workout.start.formatted(date: .complete, time: .shortened))
-          LabeledContent("Duration", value: "\(Int(workout.minutes)) min")
-          if let distance = workout.distanceKm, distance > 0 {
-            LabeledContent("Distance", value: String(format: "%.2f km", distance))
-          }
-          if let energy = workout.energyKcal { LabeledContent("Active energy", value: "\(Int(energy)) kcal") }
-          if let heart = workout.averageHeartRate { LabeledContent("Average heart rate", value: "\(Int(heart)) bpm") }
-          LabeledContent("Recorded by", value: workout.source)
-        }
-        Section {
-          Picker("Perceived effort", selection: $draft.effort) {
-            Text("Not rated").tag(Int?.none)
-            ForEach(1...10, id: \.self) { value in Text("\(value) / 10").tag(Optional(value)) }
-          }
-          Text("1–2 easy · 3–4 moderate · 5–6 hard · 7–8 very hard · 9–10 maximal")
-            .font(.caption).foregroundStyle(.secondary)
-          if let effort = draft.effort {
-            LabeledContent("Session load", value: "\(Int(workout.minutes * Double(effort))) AU")
-          }
-        } header: { Text("How did it feel?") }
-        footer: { Text("Your own effort rating. Session load = minutes × effort, in arbitrary units (AU). It is a training estimate, not a medical measurement.") }
-        Section("Muscles trained") {
-          ForEach(MuscleGroup.allCases) { group in
-            Toggle(group.rawValue, isOn: Binding(get: { draft.muscles.contains(group) }, set: { value in
-              if value { draft.muscles.insert(group) } else { draft.muscles.remove(group) }
-            }))
-          }
-        }
-        Section("Place & notes") {
-          Picker("Fitness centre", selection: $draft.gymID) {
-            Text("No place").tag(UUID?.none)
-            ForEach(journal.gyms) { gym in Text(gym.name).tag(Optional(gym.id)) }
-          }
-          TextField("Exercises, sets, progress, how you felt…", text: $draft.notes, axis: .vertical)
-            .lineLimit(3...8)
-        }
-        Section {
-          Text("These details are saved in Robur on this device. The original Apple Health workout is unchanged. Add fitness centres in Places.")
+          Text("Notes and muscle tags are saved in Robur on this device. Apple Fitness effort is imported from Health; Robur does not replace or write your original workout records.")
             .font(.footnote).foregroundStyle(.secondary)
         }
       }
-      .navigationTitle("Workout details").navigationBarTitleDisplayMode(.inline)
+      .navigationTitle("Workout analysis").navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
         ToolbarItem(placement: .confirmationAction) {
-          Button("Save") { if journal.save(draft, for: workout) { dismiss() } }.bold()
+          Button("Save") { if journal.save(draft, for: current) { dismiss() } }.bold()
         }
       }
       .onAppear {
@@ -169,6 +163,122 @@ struct WorkoutDetailView: View {
         draft = journal.annotations[workout.id] ?? WorkoutAnnotation(gymID: journal.suggestedGym(for: workout))
         loaded = true
       }
+      .task(id: workout.id) {
+        loadingDetails = true
+        await healthKit.loadWorkoutDetails(id: workout.id)
+        loadingDetails = false
+      }
     }
+  }
+
+  private var overviewSection: some View {
+    Section {
+      Label(current.title, systemImage: current.symbol).font(.title2.bold())
+      Text(current.start.formatted(date: .complete, time: .shortened))
+      LabeledContent("Duration", value: "\(Int(current.minutes)) min")
+      if let distance = current.distanceKm, distance > 0 {
+        LabeledContent("Distance", value: String(format: "%.2f km", distance))
+      }
+      if let energy = current.energyKcal { LabeledContent("Active energy", value: "\(Int(energy)) kcal") }
+      if let heart = current.averageHeartRate { LabeledContent("Average heart rate", value: "\(Int(heart)) bpm") }
+      LabeledContent("Recorded by", value: current.source)
+      if loadingDetails { ProgressView("Reading workout details…") }
+    }
+  }
+
+  private var effortSection: some View {
+    Section {
+      if let effort = current.appleEffort {
+        HStack {
+          Label("Apple Fitness effort", systemImage: "applewatch")
+          Spacer()
+          Text(String(format: "%.1f / 10", effort)).font(.title2.bold()).foregroundStyle(RoburStyle.amber)
+        }
+        ProgressView(value: effort, total: 10).tint(RoburStyle.amber)
+      } else {
+        Text("No Apple Fitness effort was recorded or shared for this workout.")
+          .font(.subheadline).foregroundStyle(.secondary)
+        Picker("Optional personal rating", selection: $draft.effort) {
+          Text("Not rated").tag(Int?.none)
+          ForEach(1...10, id: \.self) { value in Text("\(value) / 10").tag(Optional(value)) }
+        }
+      }
+      if let load = TrainingInsights.sessionLoad(for: current, annotation: draft, maxHR: maxHR) {
+        LabeledContent("Session load", value: "\(Int(load.rounded())) AU")
+      }
+    } header: { Text("Effort & load") }
+    footer: { Text("Apple Fitness effort takes priority. When unavailable, load can use sampled heart-rate intensity or your optional personal rating. AU means arbitrary units; this is a training estimate.") }
+  }
+
+  private var analysisSection: some View {
+    Section("Performance") {
+      if let pace { LabeledContent("Average pace", value: paceText(pace)) }
+      if let reference = comparablePace, let pace {
+        LabeledContent("Recent comparable pace", value: paceText(reference))
+        Text(String(format: "%.1f%% %@ than similar recent workouts", abs(pace / reference - 1) * 100,
+          pace <= reference ? "faster" : "slower")).font(.caption).foregroundStyle(.secondary)
+      }
+      if let cadence = current.cadence {
+        LabeledContent("Cadence", value: String(format: "%.0f per min", cadence))
+      }
+      if current.distanceKm == nil && current.cadence == nil {
+        Text("Pace, splits and cadence appear when the recording includes usable distance and movement samples.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+    }
+  }
+
+  private var heartRateSection: some View {
+    Section {
+      Chart(current.heartRateSamples, id: \.date) { sample in
+        LineMark(x: .value("Time", sample.date), y: .value("Heart rate", sample.bpm))
+          .foregroundStyle(RoburStyle.amber).lineStyle(StrokeStyle(lineWidth: 2))
+      }.chartYAxisLabel("bpm").frame(height: 160)
+      Chart(zones, id: \.zone) { zone in
+        BarMark(x: .value("Minutes", zone.minutes), y: .value("Zone", "Zone \(zone.zone)"))
+          .foregroundStyle(zoneColor(zone.zone)).cornerRadius(3)
+          .annotation(position: .trailing) { Text("\(Int(zone.minutes))m").font(.caption) }
+      }.frame(height: 160)
+    } header: { Text("Heart-rate zones") }
+    footer: { Text("Based on your configured maximum of \(Int(maxHR)) bpm. Time without usable samples is excluded. Change maximum HR in Settings.") }
+  }
+
+  private var splitSection: some View {
+    Section("Recorded distance splits") {
+      Chart(current.splits) { split in
+        BarMark(x: .value("Split", "\(split.index)"), y: .value("Minutes", split.minutes))
+          .foregroundStyle(RoburStyle.teal.gradient).cornerRadius(4)
+      }.frame(height: 150)
+      ForEach(current.splits) { split in
+        LabeledContent("Split \(split.index) · \(String(format: "%.2f", split.distanceKm)) km", value: paceText(split.minutes / max(split.distanceKm, 0.01)))
+      }
+      Text("Derived from recorded distance samples; recording gaps can limit split accuracy.")
+        .font(.caption).foregroundStyle(.secondary)
+    }
+  }
+
+  private var muscleSection: some View {
+    Section("Muscles trained") {
+      ForEach(MuscleGroup.allCases) { group in
+        Toggle(group.rawValue, isOn: Binding(get: { draft.muscles.contains(group) }, set: { value in
+          if value { draft.muscles.insert(group) } else { draft.muscles.remove(group) }
+        }))
+      }
+    }
+  }
+
+  private var placeSection: some View {
+    Section("Place & notes") {
+      Picker("Fitness centre", selection: $draft.gymID) {
+        Text("No place").tag(UUID?.none)
+        ForEach(journal.gyms) { gym in Text(gym.name).tag(Optional(gym.id)) }
+      }
+      TextField("Exercises, sets, progress, how you felt…", text: $draft.notes, axis: .vertical).lineLimit(3...8)
+    }
+  }
+
+  private func paceText(_ value: Double) -> String {
+    let seconds = max(0, Int((value * 60).rounded()))
+    return String(format: "%d:%02d min/km", seconds / 60, seconds % 60)
   }
 }

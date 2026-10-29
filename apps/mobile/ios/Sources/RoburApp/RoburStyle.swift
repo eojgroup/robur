@@ -20,6 +20,8 @@ extension View {
 }
 
 struct RoburRootView: View {
+  @Environment(\.scenePhase) private var scenePhase
+  @EnvironmentObject private var healthKit: HealthKitClient
   @EnvironmentObject private var journal: WorkoutJournal
   var body: some View {
     TabView {
@@ -29,6 +31,11 @@ struct RoburRootView: View {
       GymLocationsView().tabItem { Label("Places", systemImage: "mappin.and.ellipse") }
     }
     .tint(RoburStyle.teal)
+    .onChange(of: scenePhase) { _, phase in
+      if phase == .active && (healthKit.lastUpdated.map { Date().timeIntervalSince($0) > 900 } ?? true) {
+        Task { await healthKit.refreshTodaySnapshot() }
+      }
+    }
     .alert("Workout journal", isPresented: Binding(get: { journal.storageError != nil }, set: { if !$0 { journal.storageError = nil } })) {
       Button("OK") { journal.storageError = nil }
     } message: { Text(journal.storageError ?? "") }

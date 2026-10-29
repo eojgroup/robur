@@ -5,7 +5,7 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>$(DEVELOPMENT_LANGUAGE)</string>
   <key>CFBundleDisplayName</key>
-  <string>Robur</string>
+  <string>Robur Health</string>
   <key>CFBundleExecutable</key>
   <string>$(EXECUTABLE_NAME)</string>
   <key>CFBundleIdentifier</key>
@@ -31,7 +31,7 @@
   <key>NSHealthUpdateUsageDescription</key>
   <string>Robur uses HealthKit to personalize training recommendations. This version only reads your health data and does not save or change it.</string>
   <key>NSHealthShareUsageDescription</key>
-  <string>Robur reads workouts, sleep, heart rate, heart rate variability, distances, active energy and cardio fitness to show training recommendations and fitness trends over the history you choose to share.</string>
+  <string>Robur reads workouts and Apple Fitness effort, heart rate, sleep, activity, steps, exercise and stand minutes, cardio fitness, weight, height, body composition and approved Health characteristics to calculate private readiness, training load and health trends on this device.</string>
   <key>UIApplicationSceneManifest</key>
   <dict>
     <key>UIApplicationSupportsMultipleScenes</key>

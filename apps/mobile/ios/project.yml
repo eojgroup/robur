@@ -35,6 +35,7 @@ targets:
       - sdk: HealthKit.framework
       - sdk: CoreLocation.framework
       - sdk: Charts.framework
+      - sdk: UserNotifications.framework
       - target: RoburWatch Watch App
         embed: true
   RoburWatch Watch App:

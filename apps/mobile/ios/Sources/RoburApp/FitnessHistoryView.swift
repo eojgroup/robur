@@ -98,7 +98,7 @@ struct FitnessHistoryView: View {
       }.pickerStyle(.segmented)
       let visible = showLoad ? buckets.filter { $0.ratedWorkouts > 0 } : buckets
       if visible.isEmpty {
-        Text(showLoad ? "Rate workout effort in your journal to see session load over time." : "Share workouts or choose a wider history to see your training volume.")
+        Text(showLoad ? "Share Apple Fitness workout effort to see session load over time. A manual rating remains available when no Apple effort was recorded." : "Share workouts or choose a wider history to see your training volume.")
           .foregroundStyle(.secondary).frame(minHeight: 140)
       } else {
         Chart(visible) { bucket in
@@ -116,7 +116,7 @@ struct FitnessHistoryView: View {
         .frame(height: 200)
       }
       Text(showLoad
-        ? "\(buckets.reduce(0) { $0 + $1.ratedWorkouts }) of \(healthKit.workouts.count) workouts rated. Load = duration × your 1–10 effort rating. Unrated workouts are excluded."
+        ? "\(buckets.reduce(0) { $0 + $1.ratedWorkouts }) of \(healthKit.workouts.count) workouts with effort. Load = duration × Apple Fitness effort, with an optional manual fallback. Workouts without either are excluded."
         : "\(healthKit.workouts.count) workouts · \(Int(healthKit.workouts.reduce(0) { $0 + $1.minutes })) total minutes")
         .font(.caption).foregroundStyle(.secondary)
     }.roburCard()
@@ -127,7 +127,7 @@ struct FitnessHistoryView: View {
       Label("Fitness over time", systemImage: "waveform.path.ecg").font(.headline)
       Picker("Fitness metric", selection: $metric) {
         ForEach(FitnessMetric.allCases) { item in Text(item.rawValue).tag(item) }
-      }.pickerStyle(.segmented)
+      }.pickerStyle(.menu)
       if let last = points.last {
         HStack(alignment: .firstTextBaseline) {
           Text(last.value, format: .number.precision(.fractionLength(1))).font(.largeTitle.bold()).monospacedDigit()
