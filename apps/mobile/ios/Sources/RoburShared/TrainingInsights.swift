@@ -272,11 +272,15 @@ enum TrainingInsights {
     guard values.count >= 21, let average = mean(values) else { return nil }
     let fractionMet = Double(values.filter { $0 >= current }.count) / Double(values.count)
     if fractionMet >= 0.8 && average > current * 1.1 {
-      return AdaptiveGoalSuggestion(current: current, proposed: (min(current * 1.05, 30_000) / 100).rounded() * 100,
+      let proposed = (min(current * 1.05, 40_000) / 100).rounded() * 100
+      guard proposed > current else { return nil }
+      return AdaptiveGoalSuggestion(current: current, proposed: proposed,
         reason: "You met your current step goal on at least 80% of \(values.count) recorded days. Consider a gradual 5% increase; accept only if it suits you.")
     }
     if fractionMet <= 0.3 && average < current * 0.8 {
-      return AdaptiveGoalSuggestion(current: current, proposed: (max(current * 0.95, 1_000) / 100).rounded() * 100,
+      let proposed = (max(current * 0.95, 1_000) / 100).rounded() * 100
+      guard proposed < current else { return nil }
+      return AdaptiveGoalSuggestion(current: current, proposed: proposed,
         reason: "You met your step goal on at most 30% of \(values.count) recorded days. A 5% reduction may make the goal more achievable; your confirmation is required.")
     }
     return nil

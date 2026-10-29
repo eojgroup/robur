@@ -97,6 +97,10 @@ final class TrainingInsightsTests: XCTestCase {
     XCTAssertEqual(suggestion?.current, 8_000)
     XCTAssertEqual(suggestion?.proposed, 8_400)
     XCTAssertNil(TrainingInsights.adaptiveStepGoal(days: Array(days.prefix(10)), current: 8_000, now: now, calendar: calendar))
+    let high = days.map { DailyHealthMetrics(date: $0.date, steps: 60_000) }
+    XCTAssertNil(TrainingInsights.adaptiveStepGoal(days: high, current: 40_000, now: now, calendar: calendar))
+    let low = days.map { DailyHealthMetrics(date: $0.date, steps: 0) }
+    XCTAssertNil(TrainingInsights.adaptiveStepGoal(days: low, current: 1_000, now: now, calendar: calendar))
   }
 
   func testStreakCanContinueFromYesterdayButFutureDaysCannotExtendIt() {

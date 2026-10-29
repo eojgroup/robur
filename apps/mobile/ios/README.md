@@ -161,3 +161,13 @@ history, partial permissions, empty VO₂ max history, location denial, inaccura
 positions, background arrivals/departures while locked, permission downgrade, disabling detection, overlapping gym visits, saved tags after relaunch, light/dark mode,
 VoiceOver, and large text. Location and actual Health readings cannot be fully
 verified in a simulator.
+
+## Health insights 1.1
+
+Apple Fitness effort is imported on iOS 18+, with labeled fallbacks where it is
+not available. Today now contains personal-baseline readiness, transparent fitness
+scores, activity rings, load graphs, a heatmap, health trends, records and weekly
+reports. Goals and opt-in local reminders are available from the toolbar settings.
+Approve newly requested Health categories using **Access**. See
+[the feature guide and device checks](../../../docs/health-insights.md) for scoring,
+coverage rules, profile fields, notifications and workout analysis details.
