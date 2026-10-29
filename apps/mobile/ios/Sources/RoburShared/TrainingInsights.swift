@@ -219,6 +219,16 @@ enum TrainingInsights {
         report.append("\(name): building two complete weeks of readings for comparison.")
       }
     }
+    let recoveryReportSpecs: [(String, KeyPath<DailyHealthMetrics, Double?>, Int)] = [
+      ("HRV", \.hrv, 2), ("Resting HR", \.restingHR, 2), ("VO₂ max", \.vo2Max, 1)
+    ]
+    for (name, key, minimum) in recoveryReportSpecs {
+      let current = validDays.filter { $0.date >= since(7) && $0.date < today }.compactMap { positive($0[keyPath: key]) }
+      let prior = validDays.filter { $0.date >= since(14) && $0.date < since(7) }.compactMap { positive($0[keyPath: key]) }
+      if current.count >= minimum, prior.count >= minimum, let old = mean(prior), old > 0, let new = mean(current) {
+        report.append("\(name) average \(String(format: "%+.0f", (new / old - 1) * 100))% vs prior week (\(current.count)/\(prior.count) recorded days).")
+      }
+    }
     let weeklySessions = sessions.filter { $0.start >= since(7) && $0.start < today }
     report.insert("Last 7 complete days: \(weeklySessions.count) workouts, \(Int(weeklySessions.reduce(0) { $0 + $1.minutes })) training minutes.", at: 0)
     return InsightsSummary(readiness: readiness, fitness: fitness, scores: fitnessParts.map(\.0),

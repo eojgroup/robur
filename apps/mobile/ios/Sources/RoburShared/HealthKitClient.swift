@@ -431,8 +431,8 @@ extension HealthKitClient {
           source: workout.sourceRevision.source.name, appleEffort: effortScores[workout.uuid.uuidString],
           heartRateSamples: recentHeart[workout.uuid.uuidString] ?? [])
       }
-      fitnessReadings = history.readings.filter { $0.date >= Calendar.current.startOfDay(for: visibleStart) }
-      dailyMetrics = history.days
+      fitnessReadings = history.readings.filter { $0.date >= Calendar.current.startOfDay(for: visibleStart) && $0.date <= now }
+      dailyMetrics = history.days.filter { $0.date <= now }
       profile = profileResult
     } catch {
       guard historyRequest == request else { return }
@@ -636,7 +636,7 @@ extension HealthKitClient {
       let clippedEnd = min(end, sample.endDate)
       return clippedEnd > clippedStart ? DateInterval(start: clippedStart, end: clippedEnd) : nil
     }
-    return HealthImportMath.sleepMinutes(intervals: intervals, calendar: .current)
+    return HealthImportMath.sleepMinutes(intervals: intervals, calendar: .current, wakingDay: true)
   }
 
   private func readProfile(now: Date) async -> HealthProfile {

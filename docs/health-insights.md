@@ -36,7 +36,7 @@ The app refreshes on foreground return when its snapshot is older than 15 minute
 2. Compare imported effort with Fitness. Verify an effort-free workout retains
    a labeled fallback and a denied category never hides other approved history.
 3. Compare daily activity totals with Health/Fitness, especially multiple data
-   sources, sleep intervals crossing midnight and days with zero activity.
+   sources, sleep intervals crossing midnight (noon-to-noon sleep windows labeled by waking date) and days with zero activity.
 4. Inspect readiness/fitness methodology, charts and baseline coverage. Compare
    records, zone durations and estimated splits with source data.
 5. Test proposed goal changes: Cancel must preserve the old goal; Apply updates it.

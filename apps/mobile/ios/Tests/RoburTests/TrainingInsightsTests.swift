@@ -111,4 +111,15 @@ final class TrainingInsightsTests: XCTestCase {
     XCTAssertTrue(best?.value.contains("25.0 min") == true)
     XCTAssertTrue(best?.value.contains("whole workout") == true)
   }
+  func testWeeklyReportIncludesCardioAndRecoveryComparisons() {
+    let days = (1...14).map { index in
+      DailyHealthMetrics(date: day(-index), restingHR: index <= 7 ? 54 : 60,
+        hrv: index <= 7 ? 60 : 50, vo2Max: index <= 7 ? 46 : 44)
+    }
+    let report = summary(days: days).weeklyReport.joined(separator: " ")
+    XCTAssertTrue(report.contains("HRV average +20%"))
+    XCTAssertTrue(report.contains("Resting HR average -10%"))
+    XCTAssertTrue(report.contains("VO₂ max average"))
+  }
+
 }

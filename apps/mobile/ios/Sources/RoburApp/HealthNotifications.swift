@@ -148,6 +148,7 @@ struct HealthSettingsView: View {
       }
     }
     .navigationTitle("Goals & reminders")
+    .task { await notifications.applySettings() }
     .onAppear { pendingStepGoal = stepsGoal; pendingExerciseGoal = exerciseGoal }
     .onChange(of: daily) { _, _ in refreshNotifications() }
     .onChange(of: weekly) { _, _ in refreshNotifications() }

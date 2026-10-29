@@ -164,7 +164,7 @@ enum GymMonitoringPlan {
 
 // Shared by the Health importer and boundary tests; calendar days may be 23/25 hours.
 enum HealthImportMath {
-  static func sleepMinutes(intervals: [DateInterval], calendar: Calendar) -> [Date: Double] {
+  static func sleepMinutes(intervals: [DateInterval], calendar: Calendar, wakingDay: Bool = false) -> [Date: Double] {
     let sorted = intervals.filter { $0.duration > 0 }.sorted { $0.start < $1.start }
     var merged: [DateInterval] = []
     for interval in sorted {
@@ -176,8 +176,21 @@ enum HealthImportMath {
     for interval in merged {
       var cursor = interval.start
       while cursor < interval.end {
-        let day = calendar.startOfDay(for: cursor)
-        guard let nextDay = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+        var day = calendar.startOfDay(for: cursor)
+        let nextDay: Date
+        if wakingDay {
+          // Noon-to-noon windows retain a whole overnight sleep on its waking date.
+          // A midnight split would compare only part of today's night with a full baseline day.
+          if calendar.component(.hour, from: cursor) >= 12 {
+            guard let following = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            day = following
+          }
+          guard let noon = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: day) else { break }
+          nextDay = noon
+        } else {
+          guard let following = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+          nextDay = following
+        }
         let boundary = min(nextDay, interval.end)
         result[day, default: 0] += boundary.timeIntervalSince(cursor) / 60
         cursor = boundary

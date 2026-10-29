@@ -36,6 +36,17 @@ final class HealthImportTests: XCTestCase {
     XCTAssertEqual(values.count, 1)
   }
 
+  func testOvernightSleepStaysWholeOnItsWakingDay() {
+    var calendar = Calendar(identifier: .iso8601)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let formatter = ISO8601DateFormatter()
+    let start = formatter.date(from: "2026-10-28T22:00:00Z")!
+    let end = formatter.date(from: "2026-10-29T06:00:00Z")!
+    let values = HealthImportMath.sleepMinutes(intervals: [DateInterval(start: start, end: end)], calendar: calendar, wakingDay: true)
+    XCTAssertEqual(values.count, 1)
+    XCTAssertEqual(values[calendar.startOfDay(for: end)], 480)
+  }
+
   func testMeasuredZeroActivityIsPreservedRatherThanTreatedAsMissing() {
     let readings = [FitnessReading(id: "zero", date: Date(), value: 0, metric: .steps)]
     XCTAssertEqual(WorkoutAnalytics.trend(readings: readings, metric: .steps).first?.value, 0)
