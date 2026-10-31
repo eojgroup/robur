@@ -2,6 +2,8 @@ import SwiftUI
 import Charts
 
 struct HealthOverviewView: View {
+  @Environment(\.horizontalSizeClass) private var widthClass
+  @Environment(\.dynamicTypeSize) private var typeSize
   @EnvironmentObject private var healthKit: HealthKitClient
   @EnvironmentObject private var journal: WorkoutJournal
   @AppStorage("RoburMaxHeartRate") private var maxHR = 190.0
@@ -28,7 +30,7 @@ struct HealthOverviewView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 20) {
-      LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 12)], spacing: 12) {
+      LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: typeSize.isAccessibilitySize ? 1 : (widthClass == .regular ? 4 : 2)), spacing: 12) {
         compactMetric("Readiness", value: summary.readiness.map(String.init) ?? "—", detail: "Personal baseline", symbol: "sun.max", tint: RoburStyle.teal, score: summary.readiness)
         compactMetric("Fitness", value: summary.fitness.map(String.init) ?? "—", detail: "30-day outlook", symbol: "heart.circle", tint: RoburStyle.blue, score: summary.fitness)
         compactMetric("Training load", value: loadComparison.changePercent.map { String(format: "%+.0f%%", $0) } ?? "—", detail: loadComparison.classification, symbol: "chart.xyaxis.line", tint: RoburStyle.orange)
