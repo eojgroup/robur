@@ -44,7 +44,7 @@ private struct RoburHealthWidgetView: View {
   var body: some View {
     content
       .privacySensitive()
-      .containerBackground(for: .widget) { Color(red: 0.055, green: 0.10, blue: 0.18).gradient }
+      .containerBackground(for: .widget) { Color(red: 0.055, green: 0.10, blue: 0.18) }
       .widgetURL(URL(string: metric == .training ? "robur://progress" : "robur://today"))
   }
   @ViewBuilder private var content: some View {
