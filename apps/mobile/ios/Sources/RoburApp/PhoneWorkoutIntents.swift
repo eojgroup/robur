@@ -18,7 +18,7 @@ enum PhoneWorkoutActivity: String, AppEnum {
 struct OpenRoburWorkoutIntent: AppIntent {
   static var title: LocalizedStringResource { "Open Robur workout" }
   static var description: IntentDescription {
-    IntentDescription("Open the selected workout in Robur. Review it and tap Start to begin recording. You can assign this shortcut to your iPhone Action button.")
+    IntentDescription("Open a selected workout, review the setup, and tap Start to begin recording.")
   }
   static var openAppWhenRun: Bool { true }
 

@@ -17,7 +17,7 @@ enum RoburWatchWorkoutStyle: String, AppEnum {
 /// Must be compiled directly into the Watch app for Ultra Action button discovery.
 struct StartRoburWorkoutIntent: StartWorkoutIntent {
   static var title: LocalizedStringResource { "Start Robur workout" }
-  static var description: IntentDescription { "Record a workout with Robur on Apple Watch." }
+  static var description: IntentDescription { "Record the selected workout." }
 
   @Parameter(title: "Workout type", default: .functionalStrength)
   var workoutStyle: RoburWatchWorkoutStyle
