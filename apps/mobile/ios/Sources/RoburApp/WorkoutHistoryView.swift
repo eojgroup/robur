@@ -159,7 +159,10 @@ struct WorkoutDetailView: View {
         analysisSection
         if !current.heartRateSamples.isEmpty { heartRateSection }
         if !current.splits.isEmpty { splitSection }
-        muscleSection
+        Section("Quick review") {
+          WorkoutReviewFields(workout: current, muscles: $draft.muscles,
+            quick: Binding(get: { draft.quickReview ?? WorkoutQuickReview() }, set: { draft.quickReview = $0.isEmpty ? nil : $0 }))
+        }
         placeSection
         Section {
           Text("Notes and muscle tags are saved in Robur and sync between your paired iPhone and Watch. Apple Fitness effort is imported from Health; editing a review preserves the original Health workout.")

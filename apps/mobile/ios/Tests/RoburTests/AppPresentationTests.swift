@@ -52,7 +52,9 @@ final class AppPresentationTests: XCTestCase {
       ("places", AnyView(GymLocationsView())),
       ("plan", AnyView(TrainingPlannerView())),
       ("record", AnyView(WorkoutCaptureView())),
-      ("review", AnyView(WorkoutReviewEditor(workout: workouts[0])))
+      ("review", AnyView(WorkoutReviewEditor(workout: workouts[0]))),
+      ("review-cardio", AnyView(WorkoutReviewEditor(workout: workouts[1]))),
+      ("review-sport", AnyView(WorkoutReviewEditor(workout: workouts[3])))
     ]
     let output = FileManager.default.temporaryDirectory.appendingPathComponent("robur-previews")
     try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)

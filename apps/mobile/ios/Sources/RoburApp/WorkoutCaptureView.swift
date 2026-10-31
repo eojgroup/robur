@@ -3,6 +3,7 @@ import SwiftUI
 struct WorkoutLaunchPanel: View {
   @EnvironmentObject private var healthKit: HealthKitClient
   @EnvironmentObject private var journal: WorkoutJournal
+  @Environment(\.scenePhase) private var scenePhase
   @StateObject private var recorder = PhoneWorkoutRecorder.shared
   @StateObject private var reviews = WorkoutReviewStore.shared
   @StateObject private var motion = WorkoutMotionSuggestions.shared
@@ -46,7 +47,7 @@ struct WorkoutLaunchPanel: View {
         Divider()
         Label("\(pending.count) recent workouts to review", systemImage: "checklist").font(.subheadline.bold())
         ForEach(Array(pending.prefix(3))) { workout in
-          Button { selected = workout } label: {
+          Button { Self.markPrompted(workout.id); selected = workout } label: {
             HStack {
               Image(systemName: workout.symbol)
               VStack(alignment: .leading) {
@@ -54,7 +55,7 @@ struct WorkoutLaunchPanel: View {
                 Text(workout.start.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
               }
               Spacer()
-              Text("Muscles & notes").font(.caption)
+              Text(WorkoutReviewFields.caption(for: workout.activityType)).font(.caption)
               Image(systemName: "chevron.right").font(.caption)
             }
           }.buttonStyle(.plain)
@@ -62,8 +63,27 @@ struct WorkoutLaunchPanel: View {
       }
     }.roburCard()
       .sheet(item: $selected) { workout in WorkoutReviewEditor(workout: workout) }
-      .onChange(of: healthKit.workouts, initial: true) { _, _ in remind() }
+      .onChange(of: healthKit.workouts, initial: true) { _, _ in remind(); promptReview() }
       .onChange(of: reviews.reviews) { _, _ in remind() }
+      .onChange(of: scenePhase) { _, phase in if phase == .active { promptReview() } }
+  }
+
+  private static let promptedKey = "RoburWorkoutReviewPromptedIDs"
+
+  static func markPrompted(_ id: String) {
+    var ids = UserDefaults.standard.stringArray(forKey: promptedKey) ?? []
+    ids.removeAll { $0 == id }
+    ids.append(id)
+    UserDefaults.standard.set(Array(ids.suffix(100)), forKey: promptedKey)
+  }
+
+  private func promptReview() {
+    guard scenePhase == .active, selected == nil,
+          !recorder.presentationRequested, !recorder.isActive else { return }
+    let prompted = Set(UserDefaults.standard.stringArray(forKey: Self.promptedKey) ?? [])
+    guard let workout = pending.first(where: { $0.end >= Date().addingTimeInterval(-48 * 3600) && !prompted.contains($0.id) }) else { return }
+    Self.markPrompted(workout.id)
+    selected = workout
   }
 
   private func remind() {
@@ -77,7 +97,9 @@ struct WorkoutReviewEditor: View {
   @EnvironmentObject private var journal: WorkoutJournal
   @Environment(\.dismiss) private var dismiss
   @State private var muscles: Set<MuscleGroup> = []
+  @State private var quick = WorkoutQuickReview()
   @State private var notes = ""
+  @State private var showNotes = false
   @State private var error: String?
   var onSaved: (() -> Void)? = nil
 
@@ -88,28 +110,14 @@ struct WorkoutReviewEditor: View {
           Label("Workout saved", systemImage: "checkmark.circle.fill").foregroundStyle(RoburStyle.orange).font(.headline)
           Text(workout.title).font(.largeTitle.bold())
           Text("\(Int(workout.minutes)) min · \(workout.start.formatted(date: .abbreviated, time: .shortened))").foregroundStyle(.secondary)
-          Text("What did you train?").font(.title2.bold())
-          Text("Choose the muscles you worked, or leave this blank for a session that doesn’t need muscle tags.").font(.subheadline).foregroundStyle(.secondary)
-          LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-            ForEach(MuscleGroup.allCases) { group in
-              Button {
-                if muscles.contains(group) { muscles.remove(group) } else { muscles.insert(group) }
-              } label: {
-                HStack {
-                  Image(systemName: muscles.contains(group) ? "checkmark.circle.fill" : "circle")
-                  Text(group.rawValue).font(.subheadline.bold())
-                  Spacer(minLength: 0)
-                }.padding(14).background(muscles.contains(group) ? RoburStyle.orange.opacity(0.14) : RoburStyle.surface,
-                  in: RoundedRectangle(cornerRadius: 14))
-              }.buttonStyle(.plain).accessibilityAddTraits(muscles.contains(group) ? .isSelected : [])
-            }
+          WorkoutReviewFields(workout: workout, muscles: $muscles, quick: $quick)
+          DisclosureGroup("Notes (optional)", isExpanded: $showNotes) {
+            TextField("Anything to remember?", text: $notes, axis: .vertical)
+              .lineLimit(3...6).padding().background(RoburStyle.surface, in: RoundedRectangle(cornerRadius: 16))
+              .onChange(of: notes) { _, value in if value.count > 2000 { notes = String(value.prefix(2000)) } }
           }
-          Text("Session notes").font(.headline)
-          TextField("Exercises, sets, progress or how you felt", text: $notes, axis: .vertical)
-            .lineLimit(4...8).padding().background(RoburStyle.surface, in: RoundedRectangle(cornerRadius: 16))
-            .onChange(of: notes) { _, value in if value.count > 2000 { notes = String(value.prefix(2000)) } }
           if let error { Text(error).foregroundStyle(.red) }
-          Text("Your tags and notes stay in Robur and sync privately between your paired iPhone and Watch. The original Health workout and its Fitness effort rating are preserved.")
+          Text("Your review stays in Robur and syncs privately with your paired Watch. Your Health workout and Apple Fitness rating stay unchanged.")
             .font(.caption).foregroundStyle(.secondary)
         }.frame(maxWidth: 700).padding().frame(maxWidth: .infinity)
       }.background(RoburStyle.background)
@@ -121,6 +129,8 @@ struct WorkoutReviewEditor: View {
         .onAppear {
           let current = WorkoutReviewStore.shared.annotation(for: workout.id) ?? journal.annotations[workout.id]
           muscles = current?.muscles ?? []; notes = current?.notes ?? ""
+          quick = current?.quickReview ?? WorkoutQuickReview()
+          showNotes = !notes.isEmpty
         }
     }.tint(RoburStyle.orange)
   }
@@ -128,6 +138,7 @@ struct WorkoutReviewEditor: View {
   private func save() {
     var annotation = journal.annotations[workout.id] ?? WorkoutAnnotation()
     annotation.muscles = muscles; annotation.notes = notes
+    annotation.quickReview = quick.isEmpty ? nil : quick
     guard journal.save(annotation, for: workout) else { error = journal.storageError; return }
     guard WorkoutReviewStore.shared.save(annotation: annotation, forID: workout.id) else {
       error = "Saved on this device, but the paired-device review could not be queued. Try Save again."; return
@@ -173,6 +184,7 @@ struct WorkoutCaptureView: View {
                     annotation.muscles = recorder.muscleGroups; annotation.notes = recorder.notes
                     _ = journal.save(annotation, for: workout)
                   }
+                  WorkoutLaunchPanel.markPrompted(workout.id)
                   reviewing = workout
                   await healthKit.refreshTodaySnapshot()
                   await HealthNotificationManager.shared.remindToReview(workout)

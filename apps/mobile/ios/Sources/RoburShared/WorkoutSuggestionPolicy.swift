@@ -32,7 +32,7 @@ struct WorkoutReviewPolicy {
     return workouts.filter { workout in
       guard workout.end <= now, workout.end >= cutoff, !reviewedIDs.contains(workout.id) else { return false }
       let annotation = annotations[workout.id]
-      return annotation?.muscles.isEmpty != false && (annotation?.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+      return annotation?.quickReview?.isEmpty != false && annotation?.muscles.isEmpty != false && (annotation?.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }.sorted { $0.end > $1.end }
   }
 }

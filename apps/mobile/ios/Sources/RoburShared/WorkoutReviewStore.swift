@@ -20,9 +20,10 @@ enum WorkoutReviewRules {
 
   static func normalized(_ annotation: WorkoutAnnotation) -> WorkoutAnnotation? {
     guard annotation.notes.count <= maximumNotes, annotation.notes.utf8.count <= 8_000,
-          annotation.muscles.count <= MuscleGroup.allCases.count else { return nil }
+          annotation.muscles.count <= MuscleGroup.allCases.count,
+          annotation.quickReview?.isValid != false else { return nil }
     // Gym identity and personal effort remain phone-local; only the review is synced.
-    return WorkoutAnnotation(muscles: annotation.muscles, notes: annotation.notes)
+    return WorkoutAnnotation(muscles: annotation.muscles, notes: annotation.notes, quickReview: annotation.quickReview?.isEmpty == false ? annotation.quickReview : nil)
   }
 
   static func valid(_ entry: WorkoutReviewEntry, now: Date = Date()) -> Bool {
@@ -36,7 +37,7 @@ enum WorkoutReviewRules {
     if incoming.updatedAt != current.updatedAt { return incoming.updatedAt > current.updatedAt }
     // Equal-time conflicts converge on both devices without inventing an edit order.
     func key(_ entry: WorkoutReviewEntry) -> String {
-      entry.annotation.muscles.map(\.rawValue).sorted().joined(separator: ",") + "\u{0}" + entry.annotation.notes
+      entry.annotation.muscles.map(\.rawValue).sorted().joined(separator: ",") + "\u{0}" + entry.annotation.notes + "\u{0}" + (entry.annotation.quickReview?.conflictKey ?? "")
     }
     return key(incoming) > key(current)
   }

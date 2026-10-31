@@ -115,6 +115,7 @@ struct WorkoutAnnotation: Codable, Equatable {
   var effort: Int? = nil
   var gymID: UUID? = nil
   var notes = ""
+  var quickReview: WorkoutQuickReview? = nil
 }
 
 struct GymLocation: Codable, Identifiable, Equatable {

@@ -137,9 +137,12 @@ final class TrainingPlannerStore: ObservableObject {
     }
   }
 
-  /// The sole entry point that inserts Calendar events, called by the explicit export button.
-  func exportPlaceholders() async {
+  /// The sole entry point that inserts Calendar events, called by explicit add actions.
+  /// A selection adds only those sessions; nil retains the bulk-add behavior.
+  /// Previously removed placeholders may be re-added only with an explicit selection.
+  func exportPlaceholders(ids: Set<UUID>? = nil, allowReExport: Bool = false) async {
     guard !isWorking else { return }
+    if let ids, ids.isEmpty { return }
     refreshAccess()
     guard calendarAccess, let calendar = calendars.first(where: { $0.calendarIdentifier == selectedCalendarID }) else {
       lastError = "Connect Calendar with full access and choose a writable calendar first."; return
@@ -149,8 +152,10 @@ final class TrainingPlannerStore: ObservableObject {
     defer { isWorking = false }
     var next = archive
     var inserted = 0
+    var conflicting = 0
     do {
-      for index in next.entries.indices where !next.entries[index].calendarWasExported &&
+      for index in next.entries.indices where (ids?.contains(next.entries[index].id) ?? true) &&
+        (!next.entries[index].calendarWasExported || (ids != nil && allowReExport)) &&
         next.entries[index].state != .completed && next.entries[index].endDate > Date() {
         var entry = next.entries[index]
         if let found = findEvent(for: entry) {
@@ -165,7 +170,7 @@ final class TrainingPlannerStore: ObservableObject {
                   let start = event.startDate, let end = event.endDate, end > start else { return false }
             return TrainingPlanner.overlaps(DateInterval(start: entry.startDate, end: entry.endDate), DateInterval(start: start, end: end))
           }
-          guard !conflicts else { status = "Some slots now conflict with Calendar. Edit those times and try again."; continue }
+          guard !conflicts else { conflicting += 1; continue }
           let event = EKEvent(eventStore: eventStore)
           event.calendar = calendar
           event.title = entry.calendarTitle
@@ -187,6 +192,9 @@ final class TrainingPlannerStore: ObservableObject {
         guard commit(next) else { return }
       }
       status = "Added \(inserted) Calendar placeholder\(inserted == 1 ? "" : "s"). Confirm a suggestion in Robur, or remove [Suggested] in Calendar."
+      if conflicting > 0 {
+        status = "Added \(inserted) Calendar placeholder\(inserted == 1 ? "" : "s"). \(conflicting) session\(conflicting == 1 ? " conflicts" : "s conflict") with Calendar; edit the time and try again."
+      }
       try await syncReminders(in: &next)
       _ = commit(next)
     } catch { lastError = "Calendar export stopped: \(error.localizedDescription). Already linked entries will not be duplicated." }
@@ -248,6 +256,28 @@ final class TrainingPlannerStore: ObservableObject {
   func complete(id: UUID) async {
     guard let entry = entries.first(where: { $0.id == id }), entry.state == .confirmed else { return }
     _ = await update(id: id, startDate: entry.startDate, durationMinutes: entry.durationMinutes, state: .completed)
+  }
+
+  /// Called only after the user confirms removal of this session's owned placeholder.
+  func removeCalendarPlaceholder(id: UUID) async {
+    guard !isWorking, let index = entries.firstIndex(where: { $0.id == id }),
+          entries[index].calendarWasExported else { return }
+    refreshAccess()
+    guard calendarAccess else { lastError = "Connect Calendar with full access to remove this placeholder."; return }
+    guard commit(archive) else { return }
+    isWorking = true
+    defer { isWorking = false }
+    var next = archive
+    do {
+      // findEvent checks the exact Robur URL/ID marker, even when an identifier changed.
+      if let event = findEvent(for: next.entries[index]) {
+        guard event.calendar.allowsContentModifications else { throw PlannerError.readOnly }
+        try eventStore.remove(event, span: .thisEvent, commit: true)
+      }
+      next.entries[index].calendarEventID = nil
+      // Retain calendarWasExported as a tombstone: bulk add and refresh must not recreate it.
+      if commit(next) { status = "Removed this session from Calendar. Your local plan and reminders were kept." }
+    } catch { lastError = "Could not remove this Calendar placeholder: \(error.localizedDescription)" }
   }
 
   func removeLocalEntry(id: UUID) {

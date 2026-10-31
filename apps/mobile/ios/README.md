@@ -225,3 +225,15 @@ access, a read-only calendar, conflict changes before export, Calendar moves and
 confirmation, deletions, reminder completion, and timezone/DST changes. The test
 suite covers local scheduling, persistence, review merging and presentation in
 light/dark on phone and tablet; it cannot validate live sensors or account sync.
+
+
+Version 1.3.1 makes reviews specific to each workout: muscle chips for strength,
+recorded average speed/pace and pace choices for cardio, focus/execution for
+sport, and body-feeling choices for mobility. An optional 1–10 Robur feeling
+rating is separate from Apple Fitness effort. Notes are optional. Reviews sync
+with the paired Watch. Robur prompts once per recent imported workout while
+open, and immediately after saving a recorded session; Later leaves it in the
+review list. Opt-in local notifications still follow Health refreshes.
+Each plan now has its own Calendar add control, editable details, and confirmed
+placeholder removal. Bulk export remains available; deleted items stay deleted
+unless you explicitly add that individual session again.

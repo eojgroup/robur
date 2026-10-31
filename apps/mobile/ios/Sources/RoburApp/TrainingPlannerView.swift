@@ -115,7 +115,7 @@ struct TrainingPlannerView: View {
           Text("Choose a calendar").tag("")
           ForEach(store.calendars, id: \.calendarIdentifier) { Text($0.title).tag($0.calendarIdentifier) }
         }
-        Text("Review each suggestion first. This button adds new placeholders and never replaces existing events.")
+        Text("Add sessions individually below, or add all reviewed suggestions with this button. Existing events are kept.")
           .font(.caption).foregroundStyle(.secondary)
         Button("Add tentative placeholders", systemImage: "calendar.badge.plus") { Task { await store.exportPlaceholders() } }
           .buttonStyle(.borderedProminent)
@@ -160,8 +160,20 @@ struct TrainingPlannerView: View {
       Text("\(entry.durationMinutes) min\(entry.muscles.isEmpty ? "" : " · " + entry.muscles.map(\.rawValue).sorted().joined(separator: ", "))")
         .font(.caption).foregroundStyle(.secondary)
       if entry.calendarWasExported {
-        Label(entry.calendarEventID == nil ? "Calendar unlinked; no replacement will be added" : "Linked to Calendar",
+        Label(entry.calendarEventID == nil ? "Calendar unlinked" : "Linked to Calendar",
           systemImage: entry.calendarEventID == nil ? "link.badge.plus" : "link").font(.caption).foregroundStyle(.secondary)
+      } else {
+        Label("Only in your local plan", systemImage: "iphone").font(.caption).foregroundStyle(.secondary)
+      }
+      if (!entry.calendarWasExported || entry.calendarEventID == nil) && entry.state != .completed && entry.endDate > Date() {
+        Button(entry.calendarWasExported ? "Add again to Calendar" : "Add to Calendar", systemImage: "calendar.badge.plus") {
+          Task {
+            if !store.calendarAccess { await store.requestCalendarAccess() }
+            if store.calendarAccess { await store.exportPlaceholders(ids: [entry.id], allowReExport: entry.calendarWasExported) }
+          }
+        }
+        .buttonStyle(.bordered).disabled(store.isWorking)
+        .accessibilityIdentifier("add-session-to-calendar-\(entry.id.uuidString)")
       }
       ViewThatFits(in: .horizontal) {
         HStack { entryActions(entry) }
@@ -192,6 +204,9 @@ private struct TrainingPlanEditor: View {
   @State var entry: PlanEntry
   @ObservedObject var store: TrainingPlannerStore
   @Environment(\.dismiss) private var dismiss
+  @State private var showingCalendarRemoval = false
+
+  private var savedEntry: PlanEntry { store.entries.first { $0.id == entry.id } ?? entry }
 
   var body: some View {
     NavigationStack {
@@ -217,6 +232,25 @@ private struct TrainingPlanEditor: View {
           if entry.state == .suggested { Button("Confirm plan") { save(state: .confirmed) } }
           if entry.state == .confirmed { Button("Mark completed") { save(state: .completed) } }
         }.disabled(store.isWorking)
+        Section("Calendar") {
+          if savedEntry.calendarWasExported {
+            if savedEntry.calendarEventID != nil {
+              Label("Linked to Calendar", systemImage: "link")
+              Text("Saving changes updates this session's Calendar event.")
+                .font(.caption).foregroundStyle(.secondary)
+              Button("Remove from Calendar", role: .destructive) { showingCalendarRemoval = true }
+            } else {
+              Label("Calendar unlinked", systemImage: "link.badge.plus")
+              Text("This session stays in your local plan. Add it again below if you want a new Calendar placeholder.")
+                .font(.caption).foregroundStyle(.secondary)
+              if entry.state != .completed && entry.endDate > Date() { calendarAddControls(allowReExport: true) }
+            }
+          } else if entry.state != .completed && entry.endDate > Date() {
+            calendarAddControls(allowReExport: false)
+          } else {
+            Text("Only in your local plan").foregroundStyle(.secondary)
+          }
+        }.disabled(store.isWorking)
         Section {
           Button("Remove from local plan", role: .destructive) {
             store.removeLocalEntry(id: entry.id)
@@ -228,6 +262,13 @@ private struct TrainingPlanEditor: View {
       }
       .navigationTitle("Review plan").navigationBarTitleDisplayMode(.inline)
       .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+      .confirmationDialog("Remove this session from Calendar?", isPresented: $showingCalendarRemoval, titleVisibility: .visible) {
+        Button("Remove from Calendar", role: .destructive) {
+          Task { await store.removeCalendarPlaceholder(id: entry.id) }
+        }
+      } message: {
+        Text("Only this session's Robur placeholder will be deleted. Your local plan and reminders stay. A new placeholder is added only if you choose Add again to Calendar.")
+      }
     }.tint(RoburStyle.orange)
   }
 
@@ -235,6 +276,31 @@ private struct TrainingPlanEditor: View {
     Task {
       if await store.update(id: entry.id, startDate: entry.startDate, durationMinutes: entry.durationMinutes,
                             activity: entry.activity, muscles: entry.muscles, state: state) { dismiss() }
+    }
+  }
+
+  @ViewBuilder private func calendarAddControls(allowReExport: Bool) -> some View {
+    if store.calendarAccess {
+      Picker("Calendar", selection: Binding(get: { store.selectedCalendarID ?? "" }, set: { store.chooseCalendar($0) })) {
+        Text("Choose a calendar").tag("")
+        ForEach(store.calendars, id: \.calendarIdentifier) { Text($0.title).tag($0.calendarIdentifier) }
+      }
+    }
+    Button(allowReExport ? "Add again to Calendar" : "Save & add to Calendar", systemImage: "calendar.badge.plus") {
+      saveAndAddToCalendar(allowReExport: allowReExport)
+    }
+    Text("Saves the activity, date and duration above, then adds only this session. Calendar access is requested if needed.")
+      .font(.caption).foregroundStyle(.secondary)
+  }
+
+  private func saveAndAddToCalendar(allowReExport: Bool) {
+    Task {
+      guard await store.update(id: entry.id, startDate: entry.startDate, durationMinutes: entry.durationMinutes,
+                               activity: entry.activity, muscles: entry.muscles) else { return }
+      if !store.calendarAccess { await store.requestCalendarAccess() }
+      guard store.calendarAccess else { return }
+      await store.exportPlaceholders(ids: [entry.id], allowReExport: allowReExport)
+      if store.entries.first(where: { $0.id == entry.id })?.calendarEventID != nil { dismiss() }
     }
   }
 }

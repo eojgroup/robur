@@ -98,7 +98,7 @@ final class HealthNotificationManager: ObservableObject {
     defaults.set(Array(sent.suffix(100)), forKey: key)
     let content = UNMutableNotificationContent()
     content.title = "Make the session yours"
-    content.body = "Open Robur to add muscle groups and a few notes to your recent session."
+    content.body = "Open Robur for a quick review tailored to your recent workout. A few taps is all it takes."
     content.sound = .default
     do {
       try await center.add(UNNotificationRequest(identifier: "robur.review." + workout.id, content: content,
@@ -191,7 +191,7 @@ struct HealthSettingsView: View {
         Toggle("Weekly review · Sunday 18:00", isOn: $weekly)
         Toggle("Movement breaks · 09:50–20:50", isOn: $movement)
         Toggle("Goal and sustained-trend insights", isOn: $alerts)
-        Toggle("Review muscle groups after workouts", isOn: $reviews)
+        Toggle("Quick review after workouts", isOn: $reviews)
         Text(notifications.status).font(.caption).foregroundStyle(.secondary)
         if let error = notifications.error { Text(error).font(.caption).foregroundStyle(.red) }
         Text("Times follow your device’s local time. Movement breaks follow a schedule; they do not infer that you are sitting. Goal, trend and imported-workout review alerts are checked when Health data refreshes. Recorded workouts also offer a review immediately. Health values are not included on the lock screen.")

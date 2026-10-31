@@ -49,6 +49,7 @@ final class WorkoutJournal: ObservableObject {
       for key in annotationKeys(for: id) where key != workout.id {
         annotations[key]?.muscles = review.muscles
         annotations[key]?.notes = review.notes
+        annotations[key]?.quickReview = review.quickReview
       }
       if let shared = reviewStore.reviews[id], shared.annotation == review {
         appliedReviewDates[id] = shared.updatedAt
@@ -95,6 +96,7 @@ final class WorkoutJournal: ObservableObject {
         var annotation = annotations[key] ?? WorkoutAnnotation()
         annotation.muscles = entry.annotation.muscles
         annotation.notes = entry.annotation.notes
+        annotation.quickReview = entry.annotation.quickReview
         if annotations[key] != annotation { annotations[key] = annotation }
       }
       appliedReviewDates[id] = entry.updatedAt
@@ -106,7 +108,7 @@ final class WorkoutJournal: ObservableObject {
       guard let id = WorkoutReviewRules.canonicalID(key), reviewStore.reviews[id] == nil,
             appliedReviewDates[id] == nil, pendingReviewDates[id] == nil,
             let annotation = annotations[key], let review = WorkoutReviewRules.normalized(annotation),
-            !review.muscles.isEmpty || !review.notes.isEmpty else { continue }
+            !review.muscles.isEmpty || !review.notes.isEmpty || review.quickReview?.isEmpty == false else { continue }
       let entry = WorkoutReviewEntry(annotation: review, updatedAt: Date(timeIntervalSince1970: 0))
       if reviewStore.mergeRemote(entry: entry, forID: id) { appliedReviewDates[id] = entry.updatedAt }
       else { forwardingError = reviewStore.lastError }

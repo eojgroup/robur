@@ -94,7 +94,7 @@ struct RoburRootView: View {
     .onChange(of: scenePhase) { _, phase in
       WorkoutMotionSuggestions.shared.setForeground(phase == .active)
       if phase == .active { journal.synchronizeReviews() }
-      if phase == .active && (healthKit.lastUpdated.map { Date().timeIntervalSince($0) > 900 } ?? true) {
+      if phase == .active && (healthKit.lastUpdated.map { Date().timeIntervalSince($0) > 60 } ?? true) {
         Task { await healthKit.refreshTodaySnapshot() }
       }
     }

@@ -57,7 +57,7 @@ struct RoburWatchRootView: View {
             Section("Workout saved") {
               Label(workout.title, systemImage: workout.symbol).foregroundStyle(WatchTheme.beige)
               Text("\(Int(workout.minutes)) min · saved to Health").font(.caption)
-              Button("Review muscles") { reviewWorkout = workout }
+              Button("Quick review") { markPrompted(workout.id); reviewWorkout = workout }
               Button("Done") { recorder.discard() }
             }
           }
@@ -79,8 +79,9 @@ struct RoburWatchRootView: View {
         Button("Finish & save") { Task { await recorder.finish() } }
       }
       .onChange(of: recorder.phase) { _, phase in
-        if phase == .finished, let workout = recorder.lastWorkout { reviewWorkout = workout; Task { await history.refresh() } }
+        if phase == .finished, let workout = recorder.lastWorkout { markPrompted(workout.id); reviewWorkout = workout; Task { await history.refresh() } }
       }
+      .onChange(of: history.workouts) { _, _ in promptRecentReview() }
       .onChange(of: scenePhase) { _, phase in
         if phase == .active { sync.activate(); Task { await history.refresh() } }
       }
@@ -91,6 +92,21 @@ struct RoburWatchRootView: View {
         if healthKit.authorizationRequested { await history.refresh() }
       }
     }
+  }
+
+  private func markPrompted(_ id: String) {
+    let key = "RoburWatchQuickReviewPromptedIDs"
+    var ids = UserDefaults.standard.stringArray(forKey: key) ?? []
+    ids.removeAll { $0 == id }; ids.append(id)
+    UserDefaults.standard.set(Array(ids.suffix(100)), forKey: key)
+  }
+
+  private func promptRecentReview() {
+    guard scenePhase == .active, !isActive, reviewWorkout == nil else { return }
+    let prompted = Set(UserDefaults.standard.stringArray(forKey: "RoburWatchQuickReviewPromptedIDs") ?? [])
+    guard let workout = pending.first(where: { $0.end <= Date() && $0.end >= Date().addingTimeInterval(-48 * 3600) && !prompted.contains($0.id) }) else { return }
+    markPrompted(workout.id)
+    reviewWorkout = workout
   }
 
   private var startSection: some View {
@@ -138,13 +154,13 @@ struct RoburWatchRootView: View {
   }
 
   private var reviewSection: some View {
-    Section("Muscles to review") {
+    Section("Workouts to review") {
       if pending.isEmpty {
-        Text(history.workouts.isEmpty ? "Record with Robur or Apple Workout, then review the muscles trained here." : "All recent workouts reviewed.")
+        Text(history.workouts.isEmpty ? "Record with Robur or Apple Workout, then add a quick review here." : "All recent workouts reviewed.")
           .font(.caption).foregroundStyle(.secondary)
       }
       ForEach(Array(pending.prefix(8))) { workout in
-        Button { reviewWorkout = workout } label: {
+        Button { markPrompted(workout.id); reviewWorkout = workout } label: {
           VStack(alignment: .leading, spacing: 4) {
             Label(workout.title, systemImage: workout.symbol)
             Text(workout.start.formatted(date: .abbreviated, time: .omitted) + " · \(Int(workout.minutes)) min")
@@ -155,7 +171,7 @@ struct RoburWatchRootView: View {
       if !history.workouts.isEmpty {
         NavigationLink("Last 7 days") {
           List(history.workouts) { workout in
-            Button { reviewWorkout = workout } label: {
+            Button { markPrompted(workout.id); reviewWorkout = workout } label: {
               VStack(alignment: .leading, spacing: 3) {
                 Label(workout.title, systemImage: workout.symbol)
                 Text(reviews.annotation(for: workout.id) == nil ? "Needs review" : "Reviewed").font(.caption2).foregroundStyle(.secondary)
@@ -203,6 +219,7 @@ struct WatchMuscleReviewView: View {
   @EnvironmentObject private var sync: WorkoutReviewSync
   @Environment(\.dismiss) private var dismiss
   @State private var muscles: Set<MuscleGroup> = []
+  @State private var quick = WorkoutQuickReview()
   @State private var notes = ""
   @State private var loaded = false
 
@@ -211,35 +228,30 @@ struct WatchMuscleReviewView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 14) {
           Image(systemName: workout.symbol).font(.largeTitle).foregroundStyle(WatchTheme.orange)
-          Text("What did you train?").font(.title3.bold()).foregroundStyle(WatchTheme.beige)
+          Text("How did it go?").font(.title3.bold()).foregroundStyle(WatchTheme.beige)
           Text(workout.title + " · \(Int(workout.minutes)) min").font(.caption).foregroundStyle(.secondary)
-          LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-            ForEach(MuscleGroup.allCases) { group in
-              Button {
-                if muscles.contains(group) { muscles.remove(group) } else { muscles.insert(group) }
-              } label: {
-                Text(group.rawValue).font(.caption2.bold()).lineLimit(1).minimumScaleFactor(0.7)
-                  .frame(maxWidth: .infinity).padding(.vertical, 8)
-                  .background(muscles.contains(group) ? WatchTheme.orange.opacity(0.28) : Color.white.opacity(0.06), in: Capsule())
-                  .overlay { Capsule().stroke(muscles.contains(group) ? WatchTheme.orange : Color.clear, lineWidth: 1) }
-              }.buttonStyle(.plain).accessibilityLabel("\(group.rawValue), \(muscles.contains(group) ? "selected" : "not selected")")
-            }
+          WorkoutReviewFields(workout: workout, muscles: $muscles, quick: $quick)
+          DisclosureGroup("Note (optional)") {
+            TextField("Add a note", text: $notes)
+              .onChange(of: notes) { _, value in if value.count > WorkoutReviewRules.maximumNotes { notes = String(value.prefix(WorkoutReviewRules.maximumNotes)) } }
+            Text("Use dictation or the keyboard. \(notes.count)/\(WorkoutReviewRules.maximumNotes)").font(.caption2).foregroundStyle(.secondary)
           }
-          TextField("Add a note", text: $notes)
-            .onChange(of: notes) { _, value in if value.count > WorkoutReviewRules.maximumNotes { notes = String(value.prefix(WorkoutReviewRules.maximumNotes)) } }
-          Text("Use dictation or the keyboard. \(notes.count)/\(WorkoutReviewRules.maximumNotes)").font(.caption2).foregroundStyle(.secondary)
           if let error = reviews.lastError { Text(error).font(.caption).foregroundStyle(.red) }
           Button { save() } label: {
             Label("Save review", systemImage: "checkmark.circle.fill")
           }.buttonStyle(.borderedProminent).tint(WatchTheme.orange)
-          Text("Saved on this Watch and queued to your paired iPhone. Notes and muscle tags sync; raw Health readings do not.")
+          Text("Saved on this Watch and queued to your paired iPhone. Reviews sync; raw Health readings do not.")
             .font(.caption2).foregroundStyle(.secondary)
         }.padding()
       }
-      .navigationTitle("Muscle review")
+      .navigationTitle("Quick review")
       .onAppear {
         guard !loaded else { return }
-        if let annotation = reviews.annotation(for: workout.id) { muscles = annotation.muscles; notes = annotation.notes }
+        if let annotation = reviews.annotation(for: workout.id) {
+          muscles = annotation.muscles
+          quick = annotation.quickReview ?? .init()
+          notes = annotation.notes
+        }
         else if WatchWorkoutRecorder.shared.lastWorkout?.id == workout.id {
           muscles = WatchWorkoutRecorder.shared.muscleGroups
           notes = WatchWorkoutRecorder.shared.notes
@@ -250,7 +262,9 @@ struct WatchMuscleReviewView: View {
   }
 
   private func save() {
-    guard reviews.save(annotation: WorkoutAnnotation(muscles: muscles, notes: notes), forID: workout.id) else { return }
+    var annotation = WorkoutAnnotation(muscles: muscles, notes: notes)
+    annotation.quickReview = quick.isEmpty ? nil : quick
+    guard reviews.save(annotation: annotation, forID: workout.id) else { return }
     sync.activate()
     dismiss()
   }
