@@ -23,14 +23,18 @@
   <key>ITSAppUsesNonExemptEncryption</key>
   <false/>
   <key>NSHealthUpdateUsageDescription</key>
-  <string>Robur uses HealthKit to personalize training recommendations. This version only reads your health data and does not save or change it.</string>
+  <string>Robur saves workouts you choose to record to Apple Health, where they are available in Fitness. Your existing workouts and effort ratings are preserved.</string>
   <key>NSHealthShareUsageDescription</key>
-  <string>Robur reads your workouts, sleep, resting heart rate, heart rate variability, running workout distance, and cycling distance to show your training recommendation.</string>
+  <string>Robur reads workouts, heart rate, active energy and distance to show live workout metrics and recent sessions, plus sleep, HRV and resting heart rate for your training overview.</string>
   <key>WKApplication</key>
   <true/>
   <key>WKCompanionAppBundleIdentifier</key>
   <string>com.eojgroup.robur</string>
   <key>WKRunsIndependentlyOfCompanionApp</key>
   <true/>
+  <key>WKBackgroundModes</key>
+  <array>
+    <string>workout-processing</string>
+  </array>
 </dict>
 </plist>

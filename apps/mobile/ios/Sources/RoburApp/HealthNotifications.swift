@@ -19,8 +19,13 @@ final class HealthNotificationManager: ObservableObject {
     let weekly = defaults.bool(forKey: "RoburWeeklyReminder")
     let movement = defaults.bool(forKey: "RoburMovementReminder")
     let insights = defaults.bool(forKey: "RoburInsightAlerts")
+    let reviews = defaults.bool(forKey: "RoburWorkoutReviewReminders")
     center.removePendingNotificationRequests(withIdentifiers: identifiers)
-    guard daily || weekly || movement || insights else {
+    if !reviews {
+      let pending = await center.pendingNotificationRequests()
+      center.removePendingNotificationRequests(withIdentifiers: pending.filter { $0.identifier.hasPrefix("robur.review.") }.map(\.identifier))
+    }
+    guard daily || weekly || movement || insights || reviews else {
       status = "Notifications are off."
       return
     }
@@ -76,6 +81,39 @@ final class HealthNotificationManager: ObservableObject {
     }
   }
 
+  /// Called for a newly saved or recently imported workout, never from passive motion.
+  func remindToReview(_ workout: WorkoutRecord, now: Date = Date()) async {
+    guard defaults.bool(forKey: "RoburWorkoutReviewReminders"), workout.end <= now,
+          workout.end > now.addingTimeInterval(-48 * 3600) else { return }
+    let key = "RoburReviewedNotificationIDs"
+    guard !(defaults.stringArray(forKey: key) ?? []).contains(workout.id) else { return }
+    let settings = await center.notificationSettings()
+    guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
+    // Recheck after the permission await before reserving this workout.
+    guard defaults.bool(forKey: "RoburWorkoutReviewReminders"),
+          WorkoutReviewStore.shared.annotation(for: workout.id) == nil else { return }
+    var sent = defaults.stringArray(forKey: key) ?? []
+    guard !sent.contains(workout.id) else { return }
+    sent.append(workout.id)
+    defaults.set(Array(sent.suffix(100)), forKey: key)
+    let content = UNMutableNotificationContent()
+    content.title = "Make the session yours"
+    content.body = "Open Robur to add muscle groups and a few notes to your recent session."
+    content.sound = .default
+    do {
+      try await center.add(UNNotificationRequest(identifier: "robur.review." + workout.id, content: content,
+        trigger: UNTimeIntervalNotificationTrigger(timeInterval: 2, repeats: false)))
+    } catch {
+      defaults.set((defaults.stringArray(forKey: key) ?? []).filter { $0 != workout.id }, forKey: key)
+      self.error = "Unable to deliver workout reminder: \(error.localizedDescription)"
+    }
+  }
+
+  func cancelWorkoutReview(_ id: String) {
+    center.removePendingNotificationRequests(withIdentifiers: ["robur.review." + id])
+    center.removeDeliveredNotifications(withIdentifiers: ["robur.review." + id])
+  }
+
   private func insight(key: String, title: String, body: String) async {
     let storageKey = "RoburLastInsight." + key.components(separatedBy: ".").first!
     guard defaults.string(forKey: storageKey) != key else { return }
@@ -99,6 +137,9 @@ struct HealthSettingsView: View {
   @AppStorage("RoburWeeklyReminder") private var weekly = false
   @AppStorage("RoburMovementReminder") private var movement = false
   @AppStorage("RoburInsightAlerts") private var alerts = false
+  @AppStorage("RoburWorkoutReviewReminders") private var reviews = false
+  @AppStorage("RoburMotionSuggestions") private var motionSuggestions = false
+  @StateObject private var motion = WorkoutMotionSuggestions.shared
   @AppStorage("RoburStepsGoal") private var stepsGoal: Double = 8000
   @AppStorage("RoburExerciseGoal") private var exerciseGoal: Double = 30
   @AppStorage("RoburMaxHeartRate") private var maxHR: Double = 190
@@ -139,14 +180,21 @@ struct HealthSettingsView: View {
         Text("Default: 190 bpm until configured. Age estimate: 208 − 0.7 × age. Zones use 50/60/70/80/90% of max HR; these are training estimates, not a clinical test.")
           .font(.caption).foregroundStyle(.secondary)
       }
+      Section("Workout suggestions") {
+        Toggle("Suggest running or cycling while open", isOn: $motionSuggestions)
+        Text(motion.status).font(.caption).foregroundStyle(.secondary)
+        Text("Uses sustained motion on supported devices. Every suggestion needs your confirmation. Live sensor recording runs on Apple Watch; Robur does not use passive heart rate to start sessions.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
       Section("Local notifications") {
         Toggle("Daily readiness reminder · 08:00", isOn: $daily)
         Toggle("Weekly review · Sunday 18:00", isOn: $weekly)
         Toggle("Movement breaks · 09:50–20:50", isOn: $movement)
         Toggle("Goal and sustained-trend insights", isOn: $alerts)
+        Toggle("Review muscle groups after workouts", isOn: $reviews)
         Text(notifications.status).font(.caption).foregroundStyle(.secondary)
         if let error = notifications.error { Text(error).font(.caption).foregroundStyle(.red) }
-        Text("Times follow your device’s local time. Movement breaks follow a schedule; they do not infer that you are sitting. Goal and trend alerts are checked when Health data refreshes. Health values are not included on the lock screen.")
+        Text("Times follow your device’s local time. Movement breaks follow a schedule; they do not infer that you are sitting. Goal, trend and imported-workout review alerts are checked when Health data refreshes. Recorded workouts also offer a review immediately. Health values are not included on the lock screen.")
           .font(.caption).foregroundStyle(.secondary)
       }
       Section("Health access") {
@@ -164,6 +212,8 @@ struct HealthSettingsView: View {
     .onChange(of: weekly) { _, _ in refreshNotifications() }
     .onChange(of: movement) { _, _ in refreshNotifications() }
     .onChange(of: alerts) { _, _ in refreshNotifications() }
+    .onChange(of: reviews) { _, _ in refreshNotifications() }
+    .onChange(of: motionSuggestions) { _, _ in motion.updateMonitoring() }
     .confirmationDialog("Apply these daily goals?", isPresented: $confirmGoals) {
       Button("Apply \(Int(pendingStepGoal)) steps and \(Int(pendingExerciseGoal)) exercise minutes") {
         stepsGoal = pendingStepGoal; exerciseGoal = pendingExerciseGoal

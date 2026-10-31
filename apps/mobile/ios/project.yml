@@ -34,6 +34,10 @@ targets:
     dependencies:
       - sdk: HealthKit.framework
       - sdk: CoreLocation.framework
+      - sdk: CoreMotion.framework
+      - sdk: EventKit.framework
+      - sdk: AppIntents.framework
+      - sdk: WatchConnectivity.framework
       - sdk: Charts.framework
       - sdk: UserNotifications.framework
       - target: RoburWatch Watch App
@@ -61,6 +65,8 @@ targets:
           CODE_SIGN_IDENTITY: Apple Distribution
     dependencies:
       - sdk: HealthKit.framework
+      - sdk: AppIntents.framework
+      - sdk: WatchConnectivity.framework
   RoburTests:
     type: bundle.unit-test
     platform: iOS

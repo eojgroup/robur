@@ -162,7 +162,7 @@ struct WorkoutDetailView: View {
         muscleSection
         placeSection
         Section {
-          Text("Notes and muscle tags are saved in Robur on this device. Apple Fitness effort is imported from Health; Robur does not replace or write your original workout records.")
+          Text("Notes and muscle tags are saved in Robur and sync between your paired iPhone and Watch. Apple Fitness effort is imported from Health; editing a review preserves the original Health workout.")
             .font(.footnote).foregroundStyle(.secondary)
         }
       }
@@ -294,7 +294,13 @@ struct WorkoutDetailView: View {
         Text("No place").tag(UUID?.none)
         ForEach(journal.gyms) { gym in Text(gym.name).tag(Optional(gym.id)) }
       }
-      TextField("Exercises, sets, progress, how you felt…", text: $draft.notes, axis: .vertical).lineLimit(3...8)
+      TextField("Exercises, sets, progress, how you felt…", text: Binding(get: { draft.notes }, set: { value in
+        if value.count <= WorkoutReviewRules.maximumNotes || value.count < draft.notes.count { draft.notes = value }
+      }), axis: .vertical).lineLimit(3...8)
+      Text(draft.notes.count > WorkoutReviewRules.maximumNotes
+        ? "This older note is preserved locally. Shorten it to 2,000 characters to sync its review with Watch."
+        : "Up to 2,000 characters, synced with your paired Watch.")
+        .font(.caption).foregroundStyle(.secondary)
     }
   }
 

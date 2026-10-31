@@ -176,3 +176,52 @@ Version 1.2 keeps the same universal iPhone/iPad App Store product and release
 workflow. It adds adaptive tablet layouts, real iPad simulator presentation
 checks, navy/beige/orange light/dark styling, improved Fitness effort import,
 and typed workout balance. See the version 1.2 section in the feature guide.
+
+
+## Workout recording and planning 1.3
+
+Today offers timed workout recording on iPhone/iPad and a paired Watch start
+button on iPhone. Phone recording saves the selected activity and active duration
+in Health/Fitness; it does not fabricate sensor readings. The Watch uses a live
+HealthKit workout session for available heart rate, active energy and distance,
+with pause, resume, save, discard confirmation and interrupted-session recovery.
+Health write access is requested when recording starts. Watch workout Shortcuts
+and the supported Action button start a selected workout; phone Shortcuts open
+setup for confirmation. Existing Apple Fitness effort ratings remain unchanged.
+
+Saved and recent imported workouts offer muscle-group and notes reviews. Reviews
+are durable, and tags/notes sync through WatchConnectivity between paired iPhone
+and Watch with receipt acknowledgement. Health workout samples are immutable after
+saving; Robur stores later edits in its own journal, preserving effort and gym
+annotations. Optional review notifications use generic text and are evaluated
+when Health refreshes. The Watch also shows recent workouts awaiting review.
+
+Opt-in motion suggestions recognize sustained running/cycling only while Robur
+is in the foreground on supported devices. Every start requires confirmation.
+This uses Core Motion, not Apple's proprietary automatic workout alerts or
+continuous passive heart rate. No workout is silently started.
+
+Plan creates a local seven-day schedule from selected training categories,
+recent activity mix and a chosen time window. It spaces strength sessions,
+prefers less-trained selected categories, and shows a weekly summary. Full
+Calendar access optionally checks busy intervals. **Add tentative placeholders**
+is the explicit action that writes reviewed suggestions to your chosen writable
+calendar. Confirm in Robur, remove `[Suggested]` from the Calendar title, or change
+tentative availability to Busy on supported calendars. Edits are reconciled when
+Robur returns to the foreground. Deleted external items are not recreated.
+Optional Reminders access creates one reminder per confirmed plan in your chosen
+list, follows scheduling changes, and can sync completion when enabled. Calendar
+and Reminders may sync through their configured accounts. Calendar links use
+`robur://plan/<UUID>` to reopen the plan. Completion is explicit, not inferred
+from an event ending. The same universal app and TestFlight pipeline are retained.
+
+Device checks: grant/deny/revoke Health write access, save while locked, pause
+and relaunch a phone timer, retry failed saves, recover a Watch session, launch
+Watch recording from iPhone/Action button/Shortcuts, review and sync tags in both
+directions offline and after reconnecting, and check microphone dictation.
+Validate motion suggestions on a moving device; live sensors and Apple Fitness
+visibility require a real device. For planning, exercise denied Calendar/Reminder
+access, a read-only calendar, conflict changes before export, Calendar moves and
+confirmation, deletions, reminder completion, and timezone/DST changes. The test
+suite covers local scheduling, persistence, review merging and presentation in
+light/dark on phone and tablet; it cannot validate live sensors or account sync.

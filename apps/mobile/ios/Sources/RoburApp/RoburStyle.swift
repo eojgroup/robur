@@ -67,17 +67,33 @@ struct RoburRootView: View {
   @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var healthKit: HealthKitClient
   @EnvironmentObject private var journal: WorkoutJournal
+  @StateObject private var recorder = PhoneWorkoutRecorder.shared
+  @StateObject private var reviews = WorkoutReviewStore.shared
+  @State private var selectedTab = 0
   var body: some View {
-    TabView {
-      RoburTodayView().tabItem { Label("Today", systemImage: "sun.max") }
-      WorkoutHistoryView().tabItem { Label("Workouts", systemImage: "figure.strengthtraining.traditional") }
-      FitnessHistoryView().tabItem { Label("Progress", systemImage: "chart.xyaxis.line") }
-      GymLocationsView().tabItem { Label("Places", systemImage: "mappin.and.ellipse") }
+    TabView(selection: $selectedTab) {
+      RoburTodayView().tabItem { Label("Today", systemImage: "sun.max") }.tag(0)
+      WorkoutHistoryView().tabItem { Label("Workouts", systemImage: "figure.strengthtraining.traditional") }.tag(1)
+      FitnessHistoryView().tabItem { Label("Progress", systemImage: "chart.xyaxis.line") }.tag(2)
+      TrainingPlannerView().tabItem { Label("Plan", systemImage: "calendar") }.tag(3)
+      GymLocationsView().tabItem { Label("Places", systemImage: "mappin.and.ellipse") }.tag(4)
     }
     .tint(RoburStyle.orange)
     .foregroundStyle(RoburStyle.ink)
     .preferredColorScheme(appearance == "dark" ? .dark : (appearance == "light" ? .light : nil))
+    .sheet(isPresented: $recorder.presentationRequested) { WorkoutCaptureView() }
+    .task {
+      WorkoutReviewSync.shared.activate()
+      journal.synchronizeReviews()
+      WorkoutMotionSuggestions.shared.setForeground(scenePhase == .active)
+    }
+    .onChange(of: reviews.reviews) { _, _ in journal.synchronizeReviews() }
+    .onOpenURL { url in
+      if TrainingPlannerStore.shared.open(url: url) { selectedTab = 3 }
+    }
     .onChange(of: scenePhase) { _, phase in
+      WorkoutMotionSuggestions.shared.setForeground(phase == .active)
+      if phase == .active { journal.synchronizeReviews() }
       if phase == .active && (healthKit.lastUpdated.map { Date().timeIntervalSince($0) > 900 } ?? true) {
         Task { await healthKit.refreshTodaySnapshot() }
       }

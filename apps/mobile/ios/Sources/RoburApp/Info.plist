@@ -29,7 +29,7 @@
   <key>NSLocationWhenInUseUsageDescription</key>
   <string>Robur uses your current position when you ask to save a fitness centre or find a nearby saved gym for check-in.</string>
   <key>NSHealthUpdateUsageDescription</key>
-  <string>Robur uses HealthKit to personalize training recommendations. This version only reads your health data and does not save or change it.</string>
+  <string>Robur saves workouts you choose to record to Apple Health, where they are available in Fitness. Your existing workouts and effort ratings are preserved.</string>
   <key>NSHealthShareUsageDescription</key>
   <string>Robur reads workouts and Apple Fitness effort, heart rate, sleep, activity, steps, exercise and stand minutes, cardio fitness, weight, height, body composition and approved Health characteristics to calculate private readiness, training load and health trends on this device.</string>
   <key>UIApplicationSceneManifest</key>
@@ -55,6 +55,23 @@
     <string>UIInterfaceOrientationPortraitUpsideDown</string>
     <string>UIInterfaceOrientationLandscapeLeft</string>
     <string>UIInterfaceOrientationLandscapeRight</string>
+  </array>
+  <key>NSMotionUsageDescription</key>
+  <string>If you enable suggestions, Robur recognizes sustained running or cycling while open and asks whether you want to start a workout.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Robur checks busy times to suggest training slots and adds or updates your reviewed training placeholders in a calendar you choose.</string>
+  <key>NSRemindersFullAccessUsageDescription</key>
+  <string>If enabled, Robur adds reminders for confirmed training plans to a list you choose and keeps their times and completion in sync.</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>com.eojgroup.robur.plan</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>robur</string>
+      </array>
+    </dict>
   </array>
 </dict>
 </plist>

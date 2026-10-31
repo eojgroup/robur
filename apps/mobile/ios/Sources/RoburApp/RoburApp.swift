@@ -31,6 +31,7 @@ struct RoburTodayView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 22) {
           header
+          WorkoutLaunchPanel()
           HealthOverviewView()
           if let visit = journal.activeVisit {
             Label("Checked in at \(journal.gymName(visit.gymID) ?? "your gym")", systemImage: "mappin.and.ellipse")
@@ -49,7 +50,7 @@ struct RoburTodayView: View {
           VStack(alignment: .leading, spacing: 8) {
             Text("Your privacy")
               .font(.headline)
-            Text("Your Health data, workout notes and saved places stay on this device. Manage Health access in the Health app under your profile, Apps and Services, Robur.")
+            Text("Health calculations and saved places stay on this device. Workout tags and notes sync between your paired iPhone and Watch. Plans are shared with Calendar and Reminders only when you choose. Manage Health access in the Health app under your profile, Apps and Services, Robur.")
             Text("Recovery and training load are general fitness estimates, not medical advice. Scores use your personal baseline and available Health measurements. Effort prefers Apple Fitness records, with clearly labeled fallbacks. Adjust activity to how you feel.")
           }
           .font(.footnote)
