@@ -39,7 +39,7 @@ JSON.parse(File.read(File.join(icon_directory, "Contents.json"))).fetch("images"
 end
 
 require "xcodeproj"
-%w[RoburApp RoburWatchApp].each do |app_name|
+%w[RoburApp RoburWatchApp RoburWidgets RoburWatchWidgets].each do |app_name|
   plist = Xcodeproj::Plist.read_from_path(File.join(__dir__, "Sources", app_name, "Info.plist"))
   %w[NSHealthShareUsageDescription NSHealthUpdateUsageDescription].each do |key|
     abort "Missing HealthKit purpose string #{key} in #{app_name}" if plist[key].to_s.strip.empty?
@@ -48,7 +48,9 @@ end
 project = Xcodeproj::Project.open(project_path)
 {
   "Robur" => "com.eojgroup.robur",
-  "RoburWatch Watch App" => "com.eojgroup.robur.watchkitapp"
+  "RoburWatch Watch App" => "com.eojgroup.robur.watchkitapp",
+  "Robur Widgets" => "com.eojgroup.robur.widgets",
+  "Robur Watch Widgets" => "com.eojgroup.robur.watchkitapp.widgets"
 }.each do |name, identifier|
   target = project.targets.find { |candidate| candidate.name == name }
   abort "Missing target #{name}" unless target
@@ -64,4 +66,12 @@ project = Xcodeproj::Project.open(project_path)
 end
 app = project.targets.find { |target| target.name == "Robur" }
 abort "Watch companion is not embedded" unless app.copy_files_build_phases.any? { |phase| phase.files_references.any? { |file| file == project.targets.find { |target| target.name == "RoburWatch Watch App" }.product_reference } }
-puts "Robur Apple project contracts verified, including both privacy manifests and embedded Watch app."
+{
+  "Robur" => "Robur Widgets",
+  "RoburWatch Watch App" => "Robur Watch Widgets"
+}.each do |parent_name, widget_name|
+  parent = project.targets.find { |target| target.name == parent_name }
+  widget = project.targets.find { |target| target.name == widget_name }
+  abort "#{widget_name} is not embedded in #{parent_name}" unless parent.copy_files_build_phases.any? { |phase| phase.files_references.include?(widget.product_reference) }
+end
+puts "Robur Apple project contracts verified: universal app, Watch companion, both widget extensions and privacy manifests."

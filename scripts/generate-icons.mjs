@@ -81,18 +81,17 @@ function png(width, height) {
       const rgb = [0, 0, 0];
       for (const [sx, sy] of samples) {
         const u = (x + sx) / width, v = (y + sy) / height;
-        const glow = Math.max(0, 1 - Math.hypot(u - 0.85, v - 0.9) / 1.3);
-        const bg = [lerp(10, 22, glow), lerp(22, 43, glow), lerp(42, 67, glow)];
-        const ticker = [[0.18, 0.53], [0.34, 0.53], [0.405, 0.39], [0.485, 0.695], [0.575, 0.285], [0.665, 0.53], [0.82, 0.53]];
+        const bg = [13, 25, 44];
+        const ticker = [[0.16, 0.53], [0.35, 0.53], [0.415, 0.435], [0.485, 0.635], [0.575, 0.335], [0.655, 0.53], [0.84, 0.53]];
         let outer = false, pulse = false;
         for (let part = 0; part < ticker.length - 1; part += 1) {
           const distance = segmentDistance(u, v, ...ticker[part], ...ticker[part + 1]);
-          if (distance <= 0.033) {
+          if (distance <= 0.0175) {
             outer = true;
-            if (part >= 1 && part <= 4) pulse = true;
+            if (part >= 2 && part <= 4) pulse = true;
           }
         }
-        const ink = pulse ? [lerp(244, 232, v), lerp(145, 105, v), lerp(70, 36, v)] : outer ? [244, 234, 214] : bg;
+        const ink = pulse ? [241, 132, 58] : outer ? [244, 234, 214] : bg;
         for (let c = 0; c < 3; c += 1) rgb[c] += ink[c] / samples.length;
       }
       const i = row + 1 + x * 3;

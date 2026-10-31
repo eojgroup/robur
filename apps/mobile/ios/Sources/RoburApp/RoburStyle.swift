@@ -21,7 +21,7 @@ enum RoburStyle {
 /// Uses the available window width, so iPad Split View also falls back to one column.
 struct AdaptiveCardLayout: Layout {
   var spacing: CGFloat = 20
-  static func columnCount(for width: CGFloat) -> Int { width >= 760 ? 2 : 1 }
+  static func columnCount(for width: CGFloat) -> Int { width >= 1100 ? 3 : (width >= 760 ? 2 : 1) }
 
   func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
     let width = max(0, proposal.width ?? 360)
@@ -89,7 +89,9 @@ struct RoburRootView: View {
     }
     .onChange(of: reviews.reviews) { _, _ in journal.synchronizeReviews() }
     .onOpenURL { url in
-      if TrainingPlannerStore.shared.open(url: url) { selectedTab = 3 }
+      if url.host == "today" { selectedTab = 0 }
+      else if url.host == "progress" { selectedTab = 2 }
+      else if TrainingPlannerStore.shared.open(url: url) { selectedTab = 3 }
     }
     .onChange(of: scenePhase) { _, phase in
       WorkoutMotionSuggestions.shared.setForeground(phase == .active)

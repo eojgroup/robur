@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import HealthKit
+import WidgetKit
 
 @MainActor
 final class HealthKitClient: ObservableObject {
@@ -112,6 +113,7 @@ final class HealthKitClient: ObservableObject {
       snapshot = HealthSnapshotBuilder.makeSnapshot(from: metrics)
       hasHealthData = metrics.hasData
       lastUpdated = Date()
+      WidgetCenter.shared.reloadAllTimelines()
       lastError = nil
       #if os(iOS)
       await loadHistory(range: historyRange)
@@ -409,10 +411,15 @@ extension HealthKitClient {
     defer { if historyRequest == request { isLoadingHistory = false } }
     await refreshHealthAuthorizationReview()
     let now = Date()
-    let visibleStart = range.startDate(now: now) ?? store.earliestPermittedSampleDate()
+    let visibleStart: Date
+    if let bounded = range.startDate(now: now) { visibleStart = bounded }
+    else { visibleStart = await earliestAvailableHistoryDate(now: now) }
+    guard historyRequest == request else { return }
     // Analytics always retain enough data for independent 7/28/30/90-day baselines.
     let baselineStart = Calendar.current.date(byAdding: .day, value: -91, to: now) ?? visibleStart
-    let healthStart = min(visibleStart, baselineStart)
+    // Include a prior baseline before the visible range for sleep/HRV comparisons.
+    let contextStart = Calendar.current.date(byAdding: .day, value: -31, to: visibleStart) ?? visibleStart
+    let healthStart = max(store.earliestPermittedSampleDate(), min(contextStart, baselineStart))
     do {
       async let workoutSamples = historySamples(type: HKObjectType.workoutType(), start: healthStart, end: now)
       async let healthHistory = readDailyHealth(from: healthStart, to: now)
@@ -451,9 +458,42 @@ extension HealthKitClient {
       fitnessReadings = history.readings.filter { $0.date >= Calendar.current.startOfDay(for: visibleStart) && $0.date <= now }
       dailyMetrics = history.days.filter { $0.date <= now }
       profile = profileResult
+      WidgetCenter.shared.reloadAllTimelines()
     } catch {
       guard historyRequest == request else { return }
       historyError = "Unable to load history: \(error.localizedDescription). Pull to refresh to retry."
+    }
+  }
+
+  /// Bound all-history statistics to real approved records, rather than enumerating
+  /// every calendar day since HealthKit's earliest permitted save date.
+  private func earliestAvailableHistoryDate(now: Date) async -> Date {
+    let types = readTypes.compactMap { $0 as? HKSampleType }
+    let earliest = await withTaskGroup(of: Date?.self, returning: Date?.self) { group in
+      for type in types { group.addTask { await self.earliestHistorySample(type: type, now: now) } }
+      var result: Date?
+      for await date in group {
+        if let date, date <= now { result = min(result ?? date, date) }
+      }
+      return result
+    }
+    return earliest ?? Calendar.current.date(byAdding: .day, value: -91, to: now)!
+  }
+
+  private func earliestHistorySample(type: HKSampleType, now: Date) async -> Date? {
+    let healthStore = store
+    return await withCheckedContinuation { continuation in
+      let gate = HealthQueryCompletionGate()
+      let predicate = HKQuery.predicateForSamples(withStart: healthStore.earliestPermittedSampleDate(), end: now, options: [])
+      let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: 1,
+        sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)]) { query, samples, _ in
+        guard gate.claim() else { return }; healthStore.stop(query)
+        continuation.resume(returning: samples?.first?.startDate)
+      }
+      healthStore.execute(query)
+      DispatchQueue.global().asyncAfter(deadline: .now() + 8) {
+        guard gate.claim() else { return }; healthStore.stop(query); continuation.resume(returning: nil)
+      }
     }
   }
 

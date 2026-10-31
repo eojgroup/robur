@@ -22,20 +22,43 @@ struct HealthOverviewView: View {
     cachedSummary ?? TrainingInsights.make(days: [], workouts: [], annotations: [:], maxHR: maxHR)
   }
   private var latest: DailyHealthMetrics? { healthKit.dailyMetrics.filter { $0.date <= Date() }.max { $0.date < $1.date } }
+  private var latestSleep: DailyHealthMetrics? {
+    healthKit.dailyMetrics.filter { $0.date <= Date() && ($0.sleepMinutes ?? 0) > 0 }.max { $0.date < $1.date }
+  }
 
   var body: some View {
-    AdaptiveCardLayout {
-      scoreCard
-      activityCard
-      loadCard
-      balanceCard
-      heatmapCard
-      trendCard
-      zoneCard
-      reportCard
-      recordCard
-      profileCard
-      methodologyCard
+    VStack(alignment: .leading, spacing: 20) {
+      LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 12)], spacing: 12) {
+        compactMetric("Readiness", value: summary.readiness.map(String.init) ?? "—", detail: "Personal baseline", symbol: "sun.max", tint: RoburStyle.teal, score: summary.readiness)
+        compactMetric("Fitness", value: summary.fitness.map(String.init) ?? "—", detail: "30-day outlook", symbol: "heart.circle", tint: RoburStyle.blue, score: summary.fitness)
+        compactMetric("Training load", value: loadComparison.changePercent.map { String(format: "%+.0f%%", $0) } ?? "—", detail: loadComparison.classification, symbol: "chart.xyaxis.line", tint: RoburStyle.orange)
+        compactMetric("Recovery", value: latestSleep?.sleepMinutes.map { String(format: "%.1fh", $0 / 60) } ?? "—", detail: latestSleep.map { "Sleep · \($0.date.formatted(date: .abbreviated, time: .omitted))" } ?? "Sleep unavailable", symbol: "bed.double", tint: RoburStyle.blue)
+      }
+      AdaptiveCardLayout {
+        loadCard
+        recoveryCard
+        activityCard
+        balanceCard
+      }
+      NavigationLink {
+        ScrollView {
+          AdaptiveCardLayout {
+            heatmapCard
+            zoneCard
+            trendCard
+            reportCard
+            recordCard
+            profileCard
+            methodologyCard
+          }.frame(maxWidth: RoburStyle.contentWidth).padding().frame(maxWidth: .infinity)
+        }.background(RoburStyle.background).navigationTitle("Health insights")
+      } label: {
+        HStack {
+          Label("Health insights & score details", systemImage: "chart.bar.doc.horizontal")
+          Spacer()
+          Image(systemName: "chevron.right").font(.caption.bold())
+        }.font(.subheadline.bold()).roburCard()
+      }.buttonStyle(.plain)
     }
     .onChange(of: healthKit.dailyMetrics, initial: true) { _, _ in recalculate() }
     .onChange(of: healthKit.analyticsWorkouts) { _, _ in recalculate() }
@@ -46,26 +69,51 @@ struct HealthOverviewView: View {
     .sheet(isPresented: $editingTargets) { balanceTargetEditor }
   }
 
+  private func compactMetric(_ title: String, value: String, detail: String, symbol: String,
+                             tint: Color, score: Int? = nil) -> some View {
+    VStack(alignment: .leading, spacing: 9) {
+      Label(title, systemImage: symbol).font(.caption.bold()).foregroundStyle(tint)
+      Text(value).font(.system(.title, design: .rounded, weight: .bold)).monospacedDigit().minimumScaleFactor(0.7).lineLimit(1)
+      if let score { ProgressView(value: Double(score), total: 100).tint(tint) }
+      Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+    }.frame(maxWidth: .infinity, minHeight: 110, alignment: .topLeading).roburCard()
+      .accessibilityElement(children: .combine)
+  }
+
+  private var recoveryCard: some View {
+    let start = Calendar.current.date(byAdding: .day, value: -29, to: Date()) ?? Date()
+    let timeline = TrainingTimeline.make(workouts: [], days: healthKit.dailyMetrics, signal: .sleep, grain: .day, start: start)
+    return VStack(alignment: .leading, spacing: 16) {
+      Label("Recovery · sleep", systemImage: "bed.double").font(.headline)
+      if timeline.buckets.contains(where: { $0.recoveryValue != nil }) {
+        Chart(timeline.buckets) { point in
+          if let minutes = point.recoveryValue {
+            BarMark(x: .value("Date", point.date, unit: .day), y: .value("Sleep", minutes / 60))
+              .foregroundStyle(RoburStyle.blue.gradient).cornerRadius(3)
+              .accessibilityLabel(point.date.formatted(date: .abbreviated, time: .omitted))
+              .accessibilityValue(String(format: "%.1f hours asleep", minutes / 60))
+          }
+        }.chartYAxisLabel("hours").frame(height: 190)
+        HStack {
+          ForEach(Array(summary.trends.filter { ["HRV", "Resting HR"].contains($0.title) })) { trend in
+            VStack(alignment: .leading, spacing: 4) {
+              Text(trend.title).font(.caption).foregroundStyle(.secondary)
+              Text("\(Int(trend.current.rounded())) \(trend.unit)").font(.headline)
+              Text(trend.changePercent.map { String(format: "%+.0f%% vs baseline", $0) } ?? "Building baseline")
+                .font(.caption2).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+          }
+        }
+      } else { empty("Share sleep in Apple Health to see recovery history.") }
+      Text("30 days · recorded sleep only").font(.caption).foregroundStyle(.secondary)
+    }.roburCard()
+  }
+
   private func recalculate() {
     cachedSummary = TrainingInsights.make(days: healthKit.dailyMetrics, workouts: healthKit.analyticsWorkouts,
       annotations: journal.annotations, maxHR: maxHR, stepsGoal: stepsGoal, exerciseGoal: exerciseGoal)
   }
 
-  private var scoreCard: some View {
-    VStack(alignment: .leading, spacing: 18) {
-      Label("Your daily outlook", systemImage: "sparkles").font(.headline)
-      HStack(spacing: 22) {
-        InsightRing(title: "Readiness", value: summary.readiness, tint: RoburStyle.teal)
-        InsightRing(title: "Fitness", value: summary.fitness, tint: RoburStyle.blue)
-      }
-      Text("Personal estimates, recalculated from the Health data you share. Readiness compares recent recovery signals with your own prior 30 days.")
-        .font(.caption).foregroundStyle(.secondary)
-      if summary.readiness == nil || summary.fitness == nil {
-        Text("More approved history may be needed to establish a baseline. Missing measurements are excluded.")
-          .font(.caption).foregroundStyle(.secondary)
-      }
-    }.roburCard()
-  }
 
   private var activityCard: some View {
     VStack(alignment: .leading, spacing: 16) {
@@ -86,8 +134,6 @@ struct HealthOverviewView: View {
           }
         }
         .chartYAxisLabel("steps").frame(height: 130)
-        Text("Standing time is Apple Health stand minutes, which differs from the hourly stand-ring count.")
-          .font(.caption).foregroundStyle(.secondary)
       } else {
         empty("Share steps, exercise and stand time in Apple Health to see daily movement.")
       }
@@ -113,7 +159,7 @@ struct HealthOverviewView: View {
           .font(.system(.largeTitle, design: .rounded, weight: .bold)).foregroundStyle(RoburStyle.orange)
         Text(load.classification).font(.headline)
       }
-      Text("7-day load compared with your 28-day baseline").font(.subheadline).foregroundStyle(.secondary)
+      Text("7 days vs 28-day baseline").font(.subheadline).foregroundStyle(.secondary)
       if load.points.contains(where: { $0.changePercent != nil }) {
         Chart {
           ForEach(load.points, id: \.date) { point in
@@ -139,20 +185,18 @@ struct HealthOverviewView: View {
       }
       HStack {
         Text("\(load.ratedSessions)/\(load.totalSessions) sessions with Apple effort")
-        Spacer(minLength: 8)
-        Text("\(load.reportedSessions) reported · \(load.estimatedSessions) estimated")
       }.font(.caption).foregroundStyle(.secondary)
       if let error = healthKit.effortImportError {
         Text(error).font(.caption).foregroundStyle(.secondary)
         Button("Review Health access") { healthKit.requestAuthorization() }
-      } else if let status = healthKit.effortImportStatus {
-        Text(status).font(.caption).foregroundStyle(.secondary)
       }
       if load.totalSessions > 0 && load.ratedSessions == 0 && healthKit.effortImportError == nil {
         Button("Review Health access") { healthKit.requestAuthorization() }
       }
       DisclosureGroup("What this comparison includes") {
         VStack(alignment: .leading, spacing: 8) {
+          Text("\(load.reportedSessions) reported · \(load.estimatedSessions) estimated sessions")
+          if let status = healthKit.effortImportStatus { Text(status) }
           Text("Uses duration × imported Apple effort. Reported Fitness ratings take priority over Apple estimates. Unrated sessions and Robur heart-rate/manual fallbacks are excluded from this comparison.")
           Text("The shaded band is ±10% of baseline. This is Robur’s transparent 7/28-day comparison; it does not reproduce Apple’s proprietary training-load algorithm or predict injury.")
           Text("Separate Robur session load: \(Int(summary.load7)) AU over 7 days, \(Int(summary.load28)) AU over 28 days. That total can include heart-rate estimates and personal ratings.")
@@ -219,11 +263,6 @@ struct HealthOverviewView: View {
           }.font(.caption)
         }
         Divider()
-        ForEach(balance.breakdown, id: \.activity) { item in
-          LabeledContent { Text("\(item.sessions) sessions · \(Int(item.minutes)) min") }
-            label: { Label(item.activity.title, systemImage: item.activity.symbol) }
-            .font(.subheadline)
-        }
         let missing = balance.missing.map(\.title) + balance.missingActivities.map(\.title)
         if !missing.isEmpty {
           Label("Not recorded: " + missing.joined(separator: ", "), systemImage: "circle.dashed")
@@ -235,8 +274,15 @@ struct HealthOverviewView: View {
         draftActivities = selectedActivities
         editingTargets = true
       }
-      Text("Categories describe recorded workout types, not every adaptation an activity provides. Gaps reflect your chosen targets, not a requirement to play a particular sport. Missing or unshared workouts can also leave a gap.")
-        .font(.caption).foregroundStyle(.secondary)
+      DisclosureGroup("Training mix details") {
+        ForEach(balance.breakdown, id: \.activity) { item in
+          LabeledContent { Text("\(item.sessions) · \(Int(item.minutes)) min") }
+            label: { Label(item.activity.title, systemImage: item.activity.symbol) }
+            .font(.caption)
+        }
+        Text("Recorded workout types compared with your chosen targets. Missing or unshared sessions can leave gaps; no particular sport is required.")
+          .font(.caption).foregroundStyle(.secondary)
+      }.font(.caption)
     }.roburCard()
   }
 

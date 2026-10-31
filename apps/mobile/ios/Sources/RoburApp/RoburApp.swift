@@ -22,17 +22,13 @@ struct RoburTodayView: View {
   @EnvironmentObject private var journal: WorkoutJournal
   @State private var selected: WorkoutRecord?
 
-  private var snapshot: FitnessSnapshot {
-    healthKit.snapshot ?? RoburData.noHealthData
-  }
-
   var body: some View {
     NavigationStack {
       ScrollView {
         VStack(alignment: .leading, spacing: 22) {
           header
-          WorkoutLaunchPanel()
           HealthOverviewView()
+          WorkoutLaunchPanel()
           if let visit = journal.activeVisit {
             Label("Checked in at \(journal.gymName(visit.gymID) ?? "your gym")", systemImage: "mappin.and.ellipse")
               .font(.headline).foregroundStyle(RoburStyle.teal).roburCard()
@@ -46,15 +42,13 @@ struct RoburTodayView: View {
               }.buttonStyle(.plain)
             }
           }
-          permissionPrompts
-          VStack(alignment: .leading, spacing: 8) {
-            Text("Your privacy")
-              .font(.headline)
-            Text("Health calculations and saved places stay on this device. Workout tags and notes sync between your paired iPhone and Watch. Plans are shared with Calendar and Reminders only when you choose. Manage Health access in the Health app under your profile, Apps and Services, Robur.")
-            Text("Recovery and training load are general fitness estimates, not medical advice. Scores use your personal baseline and available Health measurements. Effort prefers Apple Fitness records, with clearly labeled fallbacks. Adjust activity to how you feel.")
-          }
-          .font(.footnote)
-          .foregroundStyle(.secondary)
+          if !healthKit.authorizationRequested { permissionPrompts }
+          DisclosureGroup("Privacy & health estimates") {
+            VStack(alignment: .leading, spacing: 8) {
+              Text("Health calculations and saved places stay on this device. Workout tags and notes sync between your paired iPhone and Watch. Plans are shared with Calendar and Reminders only when you choose. Manage Health access in the Health app under your profile, Apps and Services, Robur.")
+              Text("Recovery and training load are general fitness estimates, not medical advice. Scores use your personal baseline and available Health measurements. Effort prefers Apple Fitness records, with clearly labeled fallbacks. Adjust activity to how you feel.")
+            }.padding(.top, 8)
+          }.font(.footnote).foregroundStyle(.secondary)
         }
         .frame(maxWidth: RoburStyle.contentWidth)
         .padding()
@@ -94,17 +88,12 @@ struct RoburTodayView: View {
   }
 
   private var header: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text(Date().formatted(.dateTime.weekday(.wide).month(.abbreviated).day()).uppercased())
-        .font(.caption.weight(.semibold)).tracking(2).foregroundStyle(RoburStyle.beige.opacity(0.85))
-      Text("Stronger,\none session at a time.")
-        .font(.system(.largeTitle, design: .rounded, weight: .bold)).fixedSize(horizontal: false, vertical: true)
-      Label("Train with intention. Recover with confidence.", systemImage: "leaf")
-        .font(.subheadline).foregroundStyle(RoburStyle.beige.opacity(0.9))
+    HStack(alignment: .firstTextBaseline) {
+      Text("Today").font(.largeTitle.bold())
+      Spacer()
+      Text(Date().formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
+        .font(.subheadline).foregroundStyle(.secondary)
     }
-    .padding(28).frame(maxWidth: .infinity, alignment: .leading).foregroundStyle(RoburStyle.beige)
-    .background(LinearGradient(colors: [RoburStyle.navy, Color(red: 0.18, green: 0.15, blue: 0.15)],
-                               startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 28))
   }
 
   private var permissionPrompts: some View {
@@ -119,51 +108,6 @@ struct RoburTodayView: View {
         healthKit.requestAuthorization()
       }
     }
-  }
-
-  private var vitals: some View {
-    VStack(spacing: 12) {
-      DataRow(title: "Sleep", value: durationValue(snapshot.sleepMinutes))
-      DataRow(title: "Resting HR", value: metricValue(snapshot.restingHeartRateBpm, unit: "bpm"))
-      DataRow(title: "HRV", value: metricValue(snapshot.heartRateVariabilityMs, unit: "ms"))
-    }
-  }
-
-  private var recommendation: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text("TODAY'S RECOMMENDATION")
-        .font(.caption.bold())
-        .foregroundStyle(RoburStyle.teal)
-      Text(snapshot.recommendation.title)
-        .font(.title2.bold())
-      Text(snapshot.recommendation.prescription)
-        .font(.headline)
-      Text(snapshot.recommendation.rationale)
-        .font(.body)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
-  private var week: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text("THIS WEEK")
-        .font(.caption.bold())
-        .foregroundStyle(RoburStyle.teal)
-      DataRow(title: "Running", value: String(format: "%.1f km", snapshot.week.runningKm))
-      DataRow(title: "Cycling", value: String(format: "%.0f km", snapshot.week.cyclingKm))
-      DataRow(title: "Strength", value: "\(snapshot.week.strengthSessions) sessions")
-      DataRow(title: "Training", value: RoburData.duration(snapshot.week.trainingMinutes))
-    }
-  }
-
-  private func durationValue(_ minutes: Int) -> String {
-    minutes > 0 ? RoburData.duration(minutes) : "—"
-  }
-
-  private func metricValue(_ value: Int, unit: String) -> String {
-    value > 0 ? "\(value) \(unit)" : "—"
   }
 }
 

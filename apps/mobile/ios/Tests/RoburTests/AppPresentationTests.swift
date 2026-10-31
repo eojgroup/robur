@@ -95,6 +95,7 @@ final class AppPresentationTests: XCTestCase {
 
   @MainActor
   func testAdaptiveCardLayoutUsesAvailableWidth() async {
+    XCTAssertEqual(AdaptiveCardLayout.columnCount(for: 1400), 3)
     XCTAssertEqual(AdaptiveCardLayout.columnCount(for: 1024), 2)
     XCTAssertEqual(AdaptiveCardLayout.columnCount(for: 820), 2)
     XCTAssertEqual(AdaptiveCardLayout.columnCount(for: 600), 1)

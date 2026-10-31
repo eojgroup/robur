@@ -17,7 +17,7 @@ struct WorkoutLaunchPanel: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       HStack {
-        Label("Make this session yours", systemImage: "figure.run").font(.headline)
+        Label("Workout", systemImage: "figure.run").font(.headline)
         Spacer()
         Button(recorder.isActive ? "Continue workout" : "Start workout") {
           recorder.queueStart(activity: .functionalStrength)
@@ -29,7 +29,7 @@ struct WorkoutLaunchPanel: View {
             .font(.subheadline).monospacedDigit()
         }
       } else {
-        Text("Record on Apple Watch for live sensor metrics, or save a timed session from this device. Finished sessions appear in Apple Health and Fitness.")
+        Text("Start a workout or review a recent session.")
           .font(.subheadline).foregroundStyle(.secondary)
       }
       if let type = motion.suggestion, !recorder.isActive {

@@ -18,6 +18,14 @@ struct PlanEntry: Identifiable, Codable, Equatable {
   var calendarWasExported = false
   var reminderWasCreated = false
   var calendarUsesTentativeAvailability = false
+  // Optional fields keep version-1 archives readable. Local edits remain authoritative
+  // while an external app is unavailable, until that edit has been synchronized.
+  var calendarSyncPending: Bool?
+  var reminderSyncPending: Bool?
+  var isManualSession: Bool?
+  // Keep a bounded recovery anchor when an unsynced local edit moves the session.
+  var calendarLastKnownStartDate: Date?
+  var calendarExternalID: String?
 
   var endDate: Date { startDate.addingTimeInterval(Double(durationMinutes) * 60) }
   var url: URL { URL(string: "robur://plan/\(id.uuidString)")! }
@@ -26,6 +34,14 @@ struct PlanEntry: Identifiable, Codable, Equatable {
   }
   var isValid: Bool {
     startDate.timeIntervalSince1970.isFinite && (1...1_440).contains(durationMinutes)
+  }
+
+  /// A copy is a new local suggestion, never another association with the original's
+  /// Calendar event or reminder. Export remains a separate, explicit action.
+  func duplicated(startDate: Date) -> PlanEntry {
+    var copy = PlanEntry(activity: activity, startDate: startDate, durationMinutes: durationMinutes, muscles: muscles)
+    copy.isManualSession = true
+    return copy
   }
 
   /// Calendar dates remain authoritative even while an entry is still a suggestion.

@@ -9,6 +9,7 @@ struct TrainingPlannerView: View {
   @AppStorage("RoburTrainingBalanceActivities") private var activityNames = ""
   @AppStorage("RoburPlanStartHour") private var startHour = 17
   @AppStorage("RoburPlanEndHour") private var endHour = 20
+  @State private var newEntry: PlanEntry?
 
   private var categories: Set<TrainingCategory> {
     Set(categoryNames.split(separator: ",").compactMap { TrainingCategory(rawValue: String($0)) })
@@ -28,6 +29,12 @@ struct TrainingPlannerView: View {
             Text("A few editable suggestions from your recent training mix. Choose what fits your time and how you feel.")
               .foregroundStyle(.secondary)
           }
+          Button("New session", systemImage: "plus") {
+            let nextHour = Calendar.current.nextDate(after: Date(), matching: DateComponents(minute: 0), matchingPolicy: .nextTime) ?? Date()
+            newEntry = PlanEntry(activity: .walking, startDate: nextHour, durationMinutes: 30, state: .confirmed)
+          }
+          .buttonStyle(.borderedProminent)
+          .accessibilityIdentifier("new-training-session")
           AdaptiveCardLayout {
             summaryCard
             preferencesCard
@@ -35,10 +42,24 @@ struct TrainingPlannerView: View {
           }
           if let error = store.lastError { Text(error).font(.callout).foregroundStyle(.red) }
           Text(store.status).font(.callout).foregroundStyle(.secondary).accessibilityIdentifier("plan-status")
-          if store.isWorking { ProgressView("Updating plan…") }
+          if store.isWorking {
+            HStack {
+              ProgressView("Syncing Calendar & Reminders…")
+              Spacer()
+              Button("Stop sync") { store.cancelSync() }
+            }
+          }
+          if store.pendingSyncCount > 0 {
+            Text("\(store.pendingSyncCount) session\(store.pendingSyncCount == 1 ? " has" : "s have") changes saved locally and waiting to sync.")
+              .font(.callout).foregroundStyle(.secondary)
+          }
+          if store.calendarAccess || store.remindersEnabled || store.pendingSyncCount > 0 {
+            Button("Retry sync", systemImage: "arrow.clockwise") { Task { await store.reconcile() } }
+              .disabled(store.isWorking)
+          }
           if visible.isEmpty {
-            ContentUnavailableView("Start with a few suggestions", systemImage: "calendar.badge.plus",
-              description: Text("Choose your training categories and time window, then generate the next seven days."))
+            ContentUnavailableView("Plan your next session", systemImage: "calendar.badge.plus",
+              description: Text("Create a session yourself, or generate suggestions for the next seven days."))
           }
           AdaptiveCardLayout {
             ForEach(visible) { entry in entryCard(entry) }
@@ -56,6 +77,9 @@ struct TrainingPlannerView: View {
       .sheet(item: Binding(get: { store.entries.first { $0.id == store.focusedEntryID } },
                            set: { if $0 == nil { store.focusedEntryID = nil } })) { entry in
         TrainingPlanEditor(entry: entry, store: store)
+      }
+      .sheet(item: $newEntry) { entry in
+        TrainingPlanEditor(entry: entry, store: store, isNew: true)
       }
     }
   }
@@ -95,14 +119,11 @@ struct TrainingPlannerView: View {
       Text("Times use your current time zone. Generating replaces local drafts and keeps exported or confirmed plans.")
         .font(.caption).foregroundStyle(.secondary)
       Button("Generate next 7 days", systemImage: "sparkles") {
-        Task {
-          await store.reconcile()
-          store.generateWeek(workouts: healthKit.analyticsWorkouts, categories: categories,
-            preferredActivities: Set(activityNames.split(separator: ",").compactMap { WorkoutActivity(rawValue: String($0)) }),
-            startHour: startHour, endHour: endHour)
-        }
+        store.generateWeek(workouts: healthKit.analyticsWorkouts, categories: categories,
+          preferredActivities: Set(activityNames.split(separator: ",").compactMap { WorkoutActivity(rawValue: String($0)) }),
+          startHour: startHour, endHour: endHour)
       }
-      .buttonStyle(.borderedProminent).disabled(store.isWorking || categories.isEmpty)
+      .buttonStyle(.borderedProminent).disabled(categories.isEmpty)
       .accessibilityIdentifier("generate-training-plan")
     }.roburCard()
   }
@@ -159,6 +180,9 @@ struct TrainingPlannerView: View {
       Text(entry.startDate.formatted(date: .abbreviated, time: .shortened)).font(.subheadline)
       Text("\(entry.durationMinutes) min\(entry.muscles.isEmpty ? "" : " · " + entry.muscles.map(\.rawValue).sorted().joined(separator: ", "))")
         .font(.caption).foregroundStyle(.secondary)
+      if entry.calendarSyncPending == true || entry.reminderSyncPending == true {
+        Label("Saved locally · sync pending", systemImage: "arrow.clockwise").font(.caption).foregroundStyle(.secondary)
+      }
       if entry.calendarWasExported {
         Label(entry.calendarEventID == nil ? "Calendar unlinked" : "Linked to Calendar",
           systemImage: entry.calendarEventID == nil ? "link.badge.plus" : "link").font(.caption).foregroundStyle(.secondary)
@@ -184,8 +208,16 @@ struct TrainingPlannerView: View {
 
   @ViewBuilder private func entryActions(_ entry: PlanEntry) -> some View {
     Button("Review / edit") { store.focusedEntryID = entry.id }.buttonStyle(.bordered)
+    Menu("More", systemImage: "ellipsis") {
+      Button("Move one day later", systemImage: "calendar.badge.clock") { _ = store.reschedule(id: entry.id, days: 1) }
+      Button("Move one week later", systemImage: "calendar.badge.clock") { _ = store.reschedule(id: entry.id, days: 7) }
+      Button("Duplicate session", systemImage: "plus.square.on.square") {
+        let date = Calendar.current.date(byAdding: .day, value: 7, to: entry.startDate) ?? entry.startDate
+        if let id = store.duplicate(id: entry.id, startDate: date) { store.focusedEntryID = id }
+      }
+    }
     if entry.state == .suggested {
-      Button("Confirm") { Task { await store.confirm(id: entry.id) } }.buttonStyle(.borderedProminent).disabled(store.isWorking)
+      Button("Confirm") { Task { await store.confirm(id: entry.id) } }.buttonStyle(.borderedProminent)
     } else if entry.state == .confirmed {
       Button("Start in Robur", systemImage: "play.fill") {
         PhoneWorkoutRecorder.shared.queueStart(activity: entry.activity)
@@ -203,22 +235,40 @@ struct TrainingPlannerView: View {
 private struct TrainingPlanEditor: View {
   @State var entry: PlanEntry
   @ObservedObject var store: TrainingPlannerStore
+  var isNew = false
   @Environment(\.dismiss) private var dismiss
   @State private var showingCalendarRemoval = false
+  @State private var hasCreatedEntry = false
 
   private var savedEntry: PlanEntry { store.entries.first { $0.id == entry.id } ?? entry }
+  private var isUnsaved: Bool { isNew && !hasCreatedEntry }
 
   var body: some View {
     NavigationStack {
       Form {
-        Section(entry.activity.title) {
-          Text(entry.state.title).foregroundStyle(.secondary)
+        Section("Session") {
           Picker("Activity", selection: $entry.activity) {
             ForEach(WorkoutActivity.allCases) { Text($0.title).tag($0) }
           }
           DatePicker("Start", selection: $entry.startDate, displayedComponents: [.date, .hourAndMinute])
-          Stepper("Duration: \(entry.durationMinutes) min", value: $entry.durationMinutes, in: 1...1_440, step: 5)
-          if entry.activity.category == .strength {
+          LabeledContent("Duration (minutes)") {
+            TextField("Minutes", value: $entry.durationMinutes, format: .number)
+              .multilineTextAlignment(.trailing).frame(maxWidth: 90)
+          }
+          Stepper("Adjust duration", value: $entry.durationMinutes, in: 1...1_440, step: 5)
+          Picker("State", selection: $entry.state) {
+            ForEach(PlanEntryState.allCases, id: \.self) { Text($0.title).tag($0) }
+          }
+          Text("Completed plans are marked by you. You can change the state again at any time.")
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        Section("Move session") {
+          Button("One day later") { moveDraft(days: 1) }
+          Button("One week later") { moveDraft(days: 7) }
+          Text("Keeps the same local time. Save to apply the new date.").font(.caption).foregroundStyle(.secondary)
+        }
+        Section {
+          DisclosureGroup("Muscle focus (optional)") {
             ForEach(MuscleGroup.allCases) { muscle in
               Toggle(muscle.rawValue, isOn: Binding(get: { entry.muscles.contains(muscle) }, set: { selected in
                 if selected { entry.muscles.insert(muscle) } else { entry.muscles.remove(muscle) }
@@ -228,55 +278,81 @@ private struct TrainingPlanEditor: View {
         }
         if let error = store.lastError { Section { Text(error).foregroundStyle(.red) } }
         Section {
-          Button("Save changes") { save(state: nil) }
-          if entry.state == .suggested { Button("Confirm plan") { save(state: .confirmed) } }
-          if entry.state == .confirmed { Button("Mark completed") { save(state: .completed) } }
-        }.disabled(store.isWorking)
+          Button(isUnsaved ? "Create session" : "Save changes") {
+            Task { if await persist() != nil { dismiss() } }
+          }
+          .accessibilityIdentifier("save-training-session")
+          if !isUnsaved {
+            Button("Duplicate session for next week", systemImage: "plus.square.on.square") {
+              Task {
+                guard let id = await persist() else { return }
+                let date = Calendar.current.date(byAdding: .day, value: 7, to: entry.startDate) ?? entry.startDate
+                if store.duplicate(id: id, startDate: date) != nil { dismiss() }
+              }
+            }
+          }
+          Text("Changes save on this device immediately. Linked Calendar events and optional reminders sync in the background.")
+            .font(.caption).foregroundStyle(.secondary)
+          if savedEntry.calendarSyncPending == true || savedEntry.reminderSyncPending == true {
+            Label("Saved locally · sync pending", systemImage: "arrow.clockwise")
+            Button("Retry sync") { Task { await store.reconcile() } }.disabled(store.isWorking)
+          }
+        }
         Section("Calendar") {
           if savedEntry.calendarWasExported {
             if savedEntry.calendarEventID != nil {
               Label("Linked to Calendar", systemImage: "link")
-              Text("Saving changes updates this session's Calendar event.")
+              Text("Saving changes queues an update to this session's Calendar event.")
                 .font(.caption).foregroundStyle(.secondary)
               Button("Remove from Calendar", role: .destructive) { showingCalendarRemoval = true }
             } else {
               Label("Calendar unlinked", systemImage: "link.badge.plus")
-              Text("This session stays in your local plan. Add it again below if you want a new Calendar placeholder.")
+              Text("Your local plan is kept. Add it again to create a Calendar placeholder.")
                 .font(.caption).foregroundStyle(.secondary)
               if entry.state != .completed && entry.endDate > Date() { calendarAddControls(allowReExport: true) }
             }
           } else if entry.state != .completed && entry.endDate > Date() {
             calendarAddControls(allowReExport: false)
-          } else {
-            Text("Only in your local plan").foregroundStyle(.secondary)
-          }
+          } else { Text("Only in your local plan").foregroundStyle(.secondary) }
         }.disabled(store.isWorking)
-        Section {
-          Button("Remove from local plan", role: .destructive) {
-            store.removeLocalEntry(id: entry.id)
-            if !store.entries.contains(where: { $0.id == entry.id }) { dismiss() }
+        if !isUnsaved {
+          Section {
+            Button("Remove from local plan", role: .destructive) {
+              store.removeLocalEntry(id: entry.id)
+              if !store.entries.contains(where: { $0.id == entry.id }) { dismiss() }
+            }
+            Text("Existing Calendar events and reminders stay in their apps. Removed Calendar placeholders are never recreated automatically.")
+              .font(.caption).foregroundStyle(.secondary)
           }
-          Text("Any existing Calendar event or reminder stays in its app. Deleted Calendar links are never recreated automatically.")
-            .font(.caption).foregroundStyle(.secondary)
-        }.disabled(store.isWorking)
+        }
       }
-      .navigationTitle("Review plan").navigationBarTitleDisplayMode(.inline)
+      .navigationTitle(isUnsaved ? "New session" : "Edit session").navigationBarTitleDisplayMode(.inline)
       .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
       .confirmationDialog("Remove this session from Calendar?", isPresented: $showingCalendarRemoval, titleVisibility: .visible) {
         Button("Remove from Calendar", role: .destructive) {
           Task { await store.removeCalendarPlaceholder(id: entry.id) }
         }
       } message: {
-        Text("Only this session's Robur placeholder will be deleted. Your local plan and reminders stay. A new placeholder is added only if you choose Add again to Calendar.")
+        Text("Only this session's Robur placeholder will be deleted. Your local plan and reminders stay. Add again to Calendar is always an explicit action.")
       }
     }.tint(RoburStyle.orange)
   }
 
-  private func save(state: PlanEntryState?) {
-    Task {
-      if await store.update(id: entry.id, startDate: entry.startDate, durationMinutes: entry.durationMinutes,
-                            activity: entry.activity, muscles: entry.muscles, state: state) { dismiss() }
+  private func moveDraft(days: Int) {
+    if let date = Calendar.current.date(byAdding: .day, value: days, to: entry.startDate) { entry.startDate = date }
+  }
+
+  private func persist() async -> UUID? {
+    if isUnsaved {
+      guard let id = store.create(activity: entry.activity, startDate: entry.startDate, durationMinutes: entry.durationMinutes,
+                                  muscles: entry.muscles, state: entry.state) else { return nil }
+      entry.id = id
+      hasCreatedEntry = true
+      return id
     }
+    let saved = await store.update(id: entry.id, startDate: entry.startDate, durationMinutes: entry.durationMinutes,
+      activity: entry.activity, muscles: entry.muscles, state: entry.state)
+    return saved ? entry.id : nil
   }
 
   @ViewBuilder private func calendarAddControls(allowReExport: Bool) -> some View {
@@ -287,20 +363,15 @@ private struct TrainingPlanEditor: View {
       }
     }
     Button(allowReExport ? "Add again to Calendar" : "Save & add to Calendar", systemImage: "calendar.badge.plus") {
-      saveAndAddToCalendar(allowReExport: allowReExport)
+      Task {
+        guard let id = await persist() else { return }
+        if !store.calendarAccess { await store.requestCalendarAccess() }
+        guard store.calendarAccess else { return }
+        await store.exportPlaceholders(ids: [id], allowReExport: allowReExport)
+        if store.entries.first(where: { $0.id == id })?.calendarEventID != nil { dismiss() }
+      }
     }
-    Text("Saves the activity, date and duration above, then adds only this session. Calendar access is requested if needed.")
+    Text("Saves locally first, then adds only this session. Calendar access is requested if needed.")
       .font(.caption).foregroundStyle(.secondary)
-  }
-
-  private func saveAndAddToCalendar(allowReExport: Bool) {
-    Task {
-      guard await store.update(id: entry.id, startDate: entry.startDate, durationMinutes: entry.durationMinutes,
-                               activity: entry.activity, muscles: entry.muscles) else { return }
-      if !store.calendarAccess { await store.requestCalendarAccess() }
-      guard store.calendarAccess else { return }
-      await store.exportPlaceholders(ids: [entry.id], allowReExport: allowReExport)
-      if store.entries.first(where: { $0.id == entry.id })?.calendarEventID != nil { dismiss() }
-    }
   }
 }

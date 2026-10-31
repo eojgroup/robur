@@ -5,122 +5,256 @@ struct FitnessHistoryView: View {
   @EnvironmentObject private var healthKit: HealthKitClient
   @EnvironmentObject private var journal: WorkoutJournal
   @State private var metric: FitnessMetric = .cardio
-  @State private var showLoad = false
+  @State private var signal: RecoverySignal = .sleep
+  @State private var showLoad = true
   @State private var selectedDate: Date?
-  @State private var showingPeriod = false
   @State private var selectedWorkout: WorkoutRecord?
+  @State private var showingEvents = false
+  @State private var workoutMarkersOnly = false
+  @State private var timeline = TrainingTimelineSummary(buckets: [], recovery: [], events: [])
 
-  private var monthly: Bool { healthKit.historyRange == .all || healthKit.historyRange == .year }
-  private var buckets: [HistoryBucket] {
-    WorkoutAnalytics.buckets(workouts: healthKit.workouts, annotations: [:], monthly: monthly)
+  private var grain: TimelineGrain {
+    switch healthKit.historyRange {
+    case .month: return .day
+    case .quarter: return .week
+    case .year, .all: return .month
+    }
   }
   private var points: [TrendPoint] {
-    WorkoutAnalytics.trend(readings: healthKit.fitnessReadings, metric: metric, monthly: monthly)
+    let readings = healthKit.fitnessReadings.filter { $0.metric == metric && $0.value.isFinite && $0.value > 0 }
+    let grouped = Dictionary(grouping: readings) { Calendar.current.dateInterval(of: grain.component, for: $0.date)?.start ?? $0.date }
+    return grouped.map { TrendPoint(date: $0.key, value: $0.value.reduce(0) { $0 + $1.value } / Double($0.value.count)) }
+      .sorted { $0.date < $1.date }
   }
   private var chartStart: Date {
-    let earliest = ([buckets.first?.date, points.first?.date].compactMap { $0 }).min() ?? Date()
-    return Calendar.current.dateInterval(of: monthly ? .month : .weekOfYear,
-      for: healthKit.historyRange.startDate() ?? earliest)?.start ?? earliest
+    let earliest = ([timeline.buckets.first?.date, points.first?.date].compactMap { $0 }).min() ?? Date()
+    return Calendar.current.dateInterval(of: grain.component, for: healthKit.historyRange.startDate() ?? earliest)?.start ?? earliest
   }
-  private var selectedPeriod: DateInterval? {
-    selectedDate.flatMap { Calendar.current.dateInterval(of: monthly ? .month : .weekOfYear, for: $0) }
+  private var chartEnd: Date { max(Date(), chartStart.addingTimeInterval(86_400)) }
+  private var inspectedDate: Date? { selectedDate.map { Calendar.current.startOfDay(for: $0) } }
+  private var selectedSessions: [WorkoutRecord] {
+    guard let date = inspectedDate else { return [] }
+    return healthKit.workouts.filter { Calendar.current.isDate($0.start, inSameDayAs: date) }
   }
-  private var periodWorkouts: [WorkoutRecord] {
-    guard let period = selectedPeriod else { return [] }
-    return healthKit.workouts.filter { $0.start >= period.start && $0.start < period.end }
+  private var selectedHealth: DailyHealthMetrics? {
+    guard let date = inspectedDate else { return nil }
+    return healthKit.dailyMetrics.first { Calendar.current.isDate($0.date, inSameDayAs: date) }
   }
-  private var periodReading: TrendPoint? {
-    guard let start = selectedPeriod?.start else { return nil }
-    return points.first { $0.date == start }
+  private var markedEvents: [TrainingTimelineEvent] {
+    timeline.events.filter { $0.kind.isWorkout ||
+      (signal == .sleep && $0.kind == .poorSleep) ||
+      (signal == .hrv && $0.kind == .lowHRV) ||
+      (signal == .restingHR && $0.kind == .highRestingHR) }
   }
 
   var body: some View {
     NavigationStack {
       ScrollView {
         VStack(alignment: .leading, spacing: 20) {
-          VStack(alignment: .leading, spacing: 6) {
-            Text("THE LONG VIEW").font(.caption.bold()).foregroundStyle(RoburStyle.teal)
-            Text("See your progress").font(.largeTitle.bold())
-            Text("Connect the work you put in with the way your fitness changes.").foregroundStyle(.secondary)
-          }
           HistoryRangePicker()
-          if let earliest = ([healthKit.workouts.last?.start, healthKit.fitnessReadings.first?.date].compactMap { $0 }).min() {
-            Text("Available records from \(earliest.formatted(date: .abbreviated, time: .omitted))")
-              .font(.caption).foregroundStyle(.secondary)
-          }
+          timelineCard
+          if inspectedDate != nil { dayInspector }
           AdaptiveCardLayout {
-            trainingCard
             fitnessCard
+            eventCard
+            muscleCard
           }
-          if let period = selectedPeriod {
-            VStack(alignment: .leading, spacing: 12) {
-              Text("\(monthly ? "Month" : "Week") of \(period.start.formatted(date: .abbreviated, time: .omitted))").font(.headline)
-              Text("\(periodWorkouts.count) workouts · \(Int(periodWorkouts.reduce(0) { $0 + $1.minutes })) min")
-              if let reading = periodReading {
-                Text("\(metric.rawValue): \(reading.value, specifier: "%.1f") \(metric.unit) average")
-              } else { Text("No \(metric.rawValue.lowercased()) readings for this period.").foregroundStyle(.secondary) }
-              Button("Explore these workouts") { showingPeriod = true }.disabled(periodWorkouts.isEmpty)
-            }.roburCard()
-          }
-          muscleCard
-          Text("Select a date on either chart to explore the same period. Charts use \(monthly ? "monthly" : "weekly") averages and totals. Trends show associations, not proof that a particular workout caused a change. All history means every record Apple Health permits Robur to read.")
-            .font(.footnote).foregroundStyle(.secondary)
-          HistoryPermissionView()
+          Text("Same dates across charts · \(grain.rawValue.lowercased()) totals and recorded-day averages. Associations do not establish cause.")
+            .font(.caption).foregroundStyle(.secondary)
         }.frame(maxWidth: RoburStyle.contentWidth).padding().frame(maxWidth: .infinity)
       }
       .background(RoburStyle.background)
       .navigationTitle("Progress").navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        Button { healthKit.requestAuthorization() } label: { Image(systemName: "heart.text.square") }
+          .accessibilityLabel("Manage Health access")
+      }
       .refreshable { await healthKit.loadHistory(range: healthKit.historyRange) }
-      .onChange(of: healthKit.historyRange) { _, _ in selectedDate = nil }
-      .sheet(isPresented: $showingPeriod) {
+      .onChange(of: healthKit.workouts, initial: true) { _, _ in recalculate() }
+      .onChange(of: healthKit.dailyMetrics) { _, _ in recalculate() }
+      .onChange(of: signal) { _, _ in recalculate() }
+      .onChange(of: healthKit.historyRange) { _, _ in selectedDate = nil; recalculate() }
+      .sheet(item: $selectedWorkout) { WorkoutDetailView(workout: $0) }
+      .sheet(isPresented: $showingEvents) {
         NavigationStack {
-          List(periodWorkouts) { workout in
-            Button { selectedWorkout = workout } label: {
-              Label {
-                VStack(alignment: .leading) {
-                  Text(workout.title)
-                  Text(workout.start.formatted(date: .abbreviated, time: .shortened)).font(.caption)
-                }
-              } icon: { Image(systemName: workout.symbol) }
+          List {
+            Toggle("Workout markers only", isOn: $workoutMarkersOnly)
+            ForEach(timeline.events.filter { !workoutMarkersOnly || $0.kind.isWorkout }.sorted { $0.date > $1.date }) { event in
+              Button {
+                selectedDate = event.date
+                showingEvents = false
+              } label: {
+                Label {
+                  VStack(alignment: .leading, spacing: 4) {
+                    Text(event.kind.rawValue).font(.headline)
+                    Text(event.detail).font(.caption).foregroundStyle(.secondary)
+                    Text(event.date.formatted(date: .abbreviated, time: .omitted)).font(.caption)
+                  }
+                } icon: { Image(systemName: event.kind.symbol) }
+              }.buttonStyle(.plain)
             }
-          }.navigationTitle("Period workouts")
-            .toolbar { Button("Done") { showingPeriod = false } }
-            .sheet(item: $selectedWorkout) { WorkoutDetailView(workout: $0) }
+          }.navigationTitle("Marked dates")
+            .toolbar { Button("Done") { showingEvents = false } }
         }
       }
     }
   }
 
-  private var trainingCard: some View {
+  private func recalculate() {
+    timeline = TrainingTimeline.make(workouts: healthKit.workouts, days: healthKit.dailyMetrics,
+      signal: signal, grain: grain, start: healthKit.historyRange.startDate())
+  }
+
+  private var timelineCard: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Label("Training rhythm", systemImage: "chart.bar.fill").font(.headline)
-      Picker("Measure", selection: $showLoad) {
-        Text("Minutes").tag(false)
-        Text("Apple effort").tag(true)
-      }.pickerStyle(.segmented)
-      let visible = showLoad ? buckets.filter { $0.ratedWorkouts > 0 } : buckets
-      if visible.isEmpty {
-        Text(showLoad ? "Share Apple Fitness workout effort to see effort load over time. Robur personal ratings are excluded from this graph." : "Share workouts or choose a wider history to see your training volume.")
-          .foregroundStyle(.secondary).frame(minHeight: 140)
-      } else {
-        Chart(visible) { bucket in
-          BarMark(x: .value("Period", bucket.date, unit: monthly ? .month : .weekOfYear),
-                  y: .value(showLoad ? "Effort load (AU)" : "Minutes", showLoad ? bucket.load : bucket.minutes))
-            .foregroundStyle(showLoad ? RoburStyle.amber.gradient : RoburStyle.teal.gradient)
-            .cornerRadius(4)
-            .accessibilityLabel(bucket.date.formatted(date: .abbreviated, time: .omitted))
-            .accessibilityValue("\(Int(showLoad ? bucket.load : bucket.minutes)) \(showLoad ? "AU" : "minutes"), \(bucket.workouts) workouts")
-          if let selectedDate { RuleMark(x: .value("Selected", selectedDate)).foregroundStyle(.secondary.opacity(0.5)) }
-        }
-        .chartXScale(domain: chartStart...Date())
-        .chartXSelection(value: $selectedDate)
-        .chartYAxisLabel(showLoad ? "AU" : "min")
-        .frame(height: 200)
+      HStack {
+        Label("Training & recovery", systemImage: "chart.xyaxis.line").font(.headline)
+        Spacer()
+        Text(grain.rawValue).font(.caption).foregroundStyle(.secondary)
       }
-      Text(showLoad
-        ? "\(buckets.reduce(0) { $0 + $1.ratedWorkouts }) of \(healthKit.workouts.count) workouts with imported Apple effort. Load = duration × reported Fitness rating or Apple estimate. Personal ratings and Robur HR estimates are excluded."
-        : "\(healthKit.workouts.count) workouts · \(Int(healthKit.workouts.reduce(0) { $0 + $1.minutes })) total minutes")
+      Picker("Training measure", selection: $showLoad) {
+        Text("Apple effort load").tag(true)
+        Text("Minutes").tag(false)
+      }.pickerStyle(.segmented)
+      trainingChart
+      HStack {
+        Picker("Recovery signal", selection: $signal) {
+          ForEach(RecoverySignal.allCases) { Text($0.rawValue).tag($0) }
+        }.pickerStyle(.menu)
+        Spacer()
+        Label("Prior 30d", systemImage: "line.diagonal").font(.caption).foregroundStyle(.secondary)
+      }
+      recoveryChart
+      if !markedEvents.isEmpty {
+        Chart(markedEvents) { event in
+          PointMark(x: .value("Date", event.date), y: .value("Event", event.kind.isWorkout ? "Effort" : "Recovery"))
+            .foregroundStyle(event.kind.isWorkout ? RoburStyle.orange : RoburStyle.blue)
+            .symbol(event.kind.isWorkout ? .diamond : .circle).symbolSize(22)
+            .accessibilityLabel("\(event.kind.rawValue), \(event.date.formatted(date: .abbreviated, time: .omitted))")
+        }.chartXScale(domain: chartStart...chartEnd).chartXSelection(value: $selectedDate)
+          .chartXAxis(.hidden).frame(height: 52)
+      }
+      Text("Tap a date to inspect workouts and recovery. Missing readings stay empty.")
         .font(.caption).foregroundStyle(.secondary)
+      DisclosureGroup("Sources & coverage") {
+        VStack(alignment: .leading, spacing: 6) {
+          Text("\(healthKit.workouts.count) workouts · \(timeline.buckets.reduce(0) { $0 + $1.ratedSessions }) with Apple effort. Load is duration × imported Apple Fitness rating or Apple estimate; unrated sessions are excluded.")
+          Text("Recovery uses recorded-day averages. The dashed line is each reading’s preceding 30-day average, with at least 7 recorded days. Markers: sleep/HRV at least 20% below baseline, resting HR at least 10% above; sessions ≥120 min, Apple effort ≥8, marathon-distance runs, and the longest session.")
+          if let error = healthKit.effortImportError { Text(error) }
+          Text("All history includes every record Apple Health permits Robur to read. A marathon-distance marker describes a running workout of at least 42.195 km; it does not identify a race.")
+        }.font(.caption).foregroundStyle(.secondary).padding(.top, 6)
+      }.font(.caption)
+    }.roburCard()
+  }
+
+  private var trainingChart: some View {
+    let visible = timeline.buckets.filter { (showLoad ? $0.appleLoad : $0.minutes) != nil }
+    return Group {
+      if visible.isEmpty {
+        ContentUnavailableView(showLoad ? "No Apple effort load" : "No workouts", systemImage: "chart.bar",
+          description: Text(showLoad ? "Choose Minutes or review Health access." : "Choose a wider history or review Health access."))
+          .frame(height: 180)
+      } else {
+        Chart {
+          ForEach(visible) { point in
+            BarMark(x: .value("Period", point.date, unit: grain.component),
+              y: .value(showLoad ? "Apple effort load" : "Minutes", (showLoad ? point.appleLoad : point.minutes) ?? 0))
+              .foregroundStyle(RoburStyle.orange.gradient).cornerRadius(3)
+              .accessibilityLabel(point.date.formatted(date: .abbreviated, time: .omitted))
+              .accessibilityValue("\(Int((showLoad ? point.appleLoad : point.minutes) ?? 0)) \(showLoad ? "AU" : "minutes"), \(point.sessions) sessions")
+          }
+          if let selectedDate { RuleMark(x: .value("Selected date", selectedDate)).foregroundStyle(.secondary) }
+        }.chartXScale(domain: chartStart...chartEnd).chartXSelection(value: $selectedDate)
+          .chartYAxisLabel(showLoad ? "AU" : "min").frame(height: 190)
+      }
+    }
+  }
+
+  private func recoveryValue(_ value: Double) -> Double { signal == .sleep ? value / 60 : value }
+  private var recoveryChart: some View {
+    Group {
+      if timeline.recovery.isEmpty {
+        ContentUnavailableView("No \(signal.rawValue.lowercased()) readings", systemImage: signal == .sleep ? "bed.double" : "waveform.path.ecg",
+          description: Text("Choose a wider history or review Health access.")).frame(height: 160)
+      } else {
+        Chart {
+          ForEach(timeline.buckets) { point in
+            if let value = point.recoveryValue {
+              LineMark(x: .value("Period", point.date), y: .value(signal.rawValue, recoveryValue(value)))
+                .foregroundStyle(by: .value("Series", "Recorded · \(point.segment)"))
+                .lineStyle(StrokeStyle(lineWidth: 2.5))
+              PointMark(x: .value("Period", point.date), y: .value(signal.rawValue, recoveryValue(value)))
+                .foregroundStyle(RoburStyle.blue).symbolSize(18)
+                .accessibilityLabel(point.date.formatted(date: .abbreviated, time: .omitted))
+                .accessibilityValue("\(recoveryValue(value).formatted()) \(signal == .sleep ? "hours" : signal.unit), \(point.recoveryDays) recorded days")
+            }
+            if let baseline = point.recoveryBaseline {
+              LineMark(x: .value("Period", point.date), y: .value("30-day baseline", recoveryValue(baseline)))
+                .foregroundStyle(by: .value("Series", "Baseline · \(point.segment)"))
+                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+            }
+          }
+          if let selectedDate { RuleMark(x: .value("Selected date", selectedDate)).foregroundStyle(.secondary) }
+        }.chartForegroundStyleScale(range: [RoburStyle.blue]).chartLegend(.hidden)
+          .chartXScale(domain: chartStart...chartEnd).chartYScale(domain: .automatic(includesZero: false))
+          .chartXSelection(value: $selectedDate).chartYAxisLabel(signal == .sleep ? "hours" : signal.unit).frame(height: 160)
+      }
+    }
+  }
+
+  private var dayInspector: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      DatePicker("Inspect date", selection: Binding(get: { inspectedDate ?? Date() }, set: { selectedDate = $0 }),
+        in: chartStart...chartEnd, displayedComponents: .date).font(.headline)
+      LazyVGrid(columns: [GridItem(.adaptive(minimum: 135))], alignment: .leading, spacing: 12) {
+        ForEach(RecoverySignal.allCases) { metric in
+          VStack(alignment: .leading, spacing: 4) {
+            Text(metric.rawValue).font(.caption).foregroundStyle(.secondary)
+            Text(selectedHealth?[keyPath: metric.key].map { "\(Int($0.rounded())) \(metric.unit)" } ?? "No reading").font(.headline)
+          }
+        }
+      }
+      if let date = inspectedDate {
+        ForEach(timeline.events.filter { Calendar.current.isDate($0.date, inSameDayAs: date) }) { event in
+          Label("\(event.kind.rawValue) · \(event.detail)", systemImage: event.kind.symbol).font(.caption).foregroundStyle(.secondary)
+        }
+      }
+      if selectedSessions.isEmpty { Text("No workouts recorded on this date.").font(.subheadline).foregroundStyle(.secondary) }
+      ForEach(selectedSessions) { workout in
+        Button { selectedWorkout = workout } label: {
+          HStack {
+            Label(workout.title, systemImage: workout.symbol)
+            Spacer()
+            Text("\(Int(workout.minutes)) min").monospacedDigit()
+            Image(systemName: "chevron.right").font(.caption)
+          }.font(.subheadline)
+        }.buttonStyle(.plain)
+      }
+    }.roburCard()
+  }
+
+  private var eventCard: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      Label("Dates to explore", systemImage: "calendar.badge.clock").font(.headline)
+      if markedEvents.isEmpty { Text("Long sessions, high effort and recovery changes appear here as history becomes available.").foregroundStyle(.secondary) }
+      ForEach(Array(markedEvents.sorted { $0.date > $1.date }.prefix(8))) { event in
+        Button { selectedDate = event.date } label: {
+          HStack(alignment: .top, spacing: 10) {
+            Image(systemName: event.kind.symbol).foregroundStyle(event.kind.isWorkout ? RoburStyle.orange : RoburStyle.blue)
+            VStack(alignment: .leading, spacing: 3) {
+              Text(event.kind.rawValue).font(.subheadline.bold())
+              Text(event.detail).font(.caption).foregroundStyle(.secondary)
+              Text(event.date.formatted(date: .abbreviated, time: .omitted)).font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right").font(.caption)
+          }
+        }.buttonStyle(.plain)
+      }
+      if !timeline.events.isEmpty {
+        Button("All marked dates (\(timeline.events.count))") { showingEvents = true }.font(.subheadline)
+      }
+      Text("Tap a marker to inspect the same date").font(.caption).foregroundStyle(.secondary)
     }.roburCard()
   }
 
@@ -133,31 +267,20 @@ struct FitnessHistoryView: View {
       if let last = points.last {
         HStack(alignment: .firstTextBaseline) {
           Text(last.value, format: .number.precision(.fractionLength(1))).font(.largeTitle.bold()).monospacedDigit()
-          Text(metric.unit).foregroundStyle(.secondary)
+          Text(metric.unit).font(.caption).foregroundStyle(.secondary)
           Spacer()
           if let first = points.first, points.count > 1 {
             Text(String(format: "%+.1f", last.value - first.value)).font(.headline).foregroundStyle(RoburStyle.blue)
           }
         }
-        Text("Latest period average\(points.count > 1 ? " · change from first period" : "")").font(.caption).foregroundStyle(.secondary)
         Chart(points) { point in
-          LineMark(x: .value("Period", point.date), y: .value(metric.rawValue, point.value))
-            .foregroundStyle(RoburStyle.blue).lineStyle(StrokeStyle(lineWidth: 3))
-          PointMark(x: .value("Period", point.date), y: .value(metric.rawValue, point.value))
-            .foregroundStyle(RoburStyle.blue)
-            .accessibilityLabel(point.date.formatted(date: .abbreviated, time: .omitted))
-            .accessibilityValue("\(point.value.formatted()) \(metric.unit)")
-          if let selectedDate { RuleMark(x: .value("Selected", selectedDate)).foregroundStyle(.secondary.opacity(0.5)) }
-        }
-        .chartXScale(domain: chartStart...Date())
-        .chartYScale(domain: .automatic(includesZero: false))
-        .chartXSelection(value: $selectedDate)
-        .frame(height: 200)
-      } else {
-        Text("No \(metric.rawValue.lowercased()) readings in this period. Try a wider history or manage Health access.")
-          .foregroundStyle(.secondary).frame(minHeight: 140)
-      }
-      Text(metric.explanation).font(.caption).foregroundStyle(.secondary)
+          PointMark(x: .value("Period", point.date), y: .value(metric.rawValue, point.value)).foregroundStyle(RoburStyle.blue)
+          if let selectedDate { RuleMark(x: .value("Selected", selectedDate)).foregroundStyle(.secondary) }
+        }.chartXScale(domain: chartStart...chartEnd).chartYScale(domain: .automatic(includesZero: false))
+          .chartXSelection(value: $selectedDate).frame(height: 180)
+        Text("Recorded period averages · change from first period").font(.caption).foregroundStyle(.secondary)
+      } else { Text("No \(metric.rawValue.lowercased()) readings in this history.").foregroundStyle(.secondary).frame(minHeight: 140) }
+      DisclosureGroup("About \(metric.rawValue.lowercased())") { Text(metric.explanation).font(.caption).foregroundStyle(.secondary) }.font(.caption)
     }.roburCard()
   }
 
@@ -166,17 +289,14 @@ struct FitnessHistoryView: View {
       (group, healthKit.workouts.filter { journal.annotations[$0.id]?.muscles.contains(group) == true }.count)
     }.filter { $0.1 > 0 }
     return VStack(alignment: .leading, spacing: 16) {
-      Label("Where you put the work", systemImage: "figure.strengthtraining.traditional").font(.headline)
-      if totals.isEmpty {
-        Text("Tag muscles on individual workouts to see your training balance here.").foregroundStyle(.secondary)
-      } else {
+      Label("Muscle balance", systemImage: "figure.strengthtraining.traditional").font(.headline)
+      if totals.isEmpty { Text("Tag muscles on a workout to see your training balance.").foregroundStyle(.secondary) }
+      else {
         Chart(totals, id: \.0) { group, count in
-          BarMark(x: .value("Sessions", count), y: .value("Muscle", group.rawValue))
-            .foregroundStyle(RoburStyle.teal).cornerRadius(4)
+          BarMark(x: .value("Sessions", count), y: .value("Muscle", group.rawValue)).foregroundStyle(RoburStyle.teal).cornerRadius(4)
             .annotation(position: .trailing) { Text("\(count)").font(.caption) }
         }.frame(height: CGFloat(max(120, totals.count * 32)))
-        Text("Sessions tagged per muscle, within the selected history. A workout can train several groups.")
-          .font(.caption).foregroundStyle(.secondary)
+        Text("Sessions tagged per muscle · selected history").font(.caption).foregroundStyle(.secondary)
       }
     }.roburCard()
   }

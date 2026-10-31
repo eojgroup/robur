@@ -237,3 +237,39 @@ review list. Opt-in local notifications still follow Health refreshes.
 Each plan now has its own Calendar add control, editable details, and confirmed
 placeholder removal. Bulk export remains available; deleted items stay deleted
 unless you explicitly add that individual session again.
+
+
+## Dashboard, planner and widgets 1.4
+
+Today prioritizes current readiness, fitness, sleep and movement with visual load,
+recovery and training-mix cards. Wider iPad windows use denser adaptive cards in
+the same universal app. Progress aligns training volume/imported effort with
+sleep, HRV and resting heart rate over daily, weekly or monthly periods, including
+all approved history. Select a date or notable event to inspect its workouts and
+recovery context. Markers identify marathon-distance runs (not necessarily races),
+long/high-effort sessions and changes relative to prior personal baselines; these
+are associations, not causal or medical conclusions. All-history queries first
+find the earliest approved records to avoid enumerating empty ancient dates.
+
+Planning now saves local changes independently of Calendar/Reminders. New session,
+activity/time/duration/state changes, duplication and quick date moves remain
+available during sync. External operations run off the UI thread with deadlines,
+cancellation and a retry path. Pending changes persist across relaunch; existing
+Calendar items are changed only after matching Robur ownership markers.
+
+Recovery, training-week and cardio-fitness widgets support iPhone/iPad Home and
+Lock Screens, plus Watch widgets/complications. They read types already permitted
+to the containing app; widgets never prompt for Health permission. Recovery uses
+sleep/heart/activity signals relative to a personal baseline, excluding imported
+workout effort and configured HR zones, so it is a signal estimate rather than
+the full app readiness score. Refresh requests are scheduled about every 15 minutes;
+WidgetKit decides delivery timing. Values expire after an hour and always show
+refresh/measurement dates. Locked, denied or missing Health data stays unavailable,
+not zero. Health views use privacySensitive redaction. No app group, account or
+backend is introduced. The release script registers the two widget extension IDs,
+enables HealthKit, and generates their profiles using the existing signing key.
+
+Device checks: Calendar/Reminders offline or slow while editing/creating/moving a
+linked plan; cancel/retry a sync and relaunch pending edits; delete or move an event
+in Calendar; all-history missing and partial Health permissions; widgets while
+locked/unlocked and after Health permission changes; small/large iPad split windows.

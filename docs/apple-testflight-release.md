@@ -151,3 +151,12 @@ Pushes cannot deploy GCP. Local checks and application validation remain usable.
 Existing cloud resources are not destroyed and can continue incurring charges.
 When resuming GCP, deliberately set the repository variable to `true`, then
 follow the separate GCP onboarding guide and dispatch the required workflow.
+
+
+The universal 1.4 build embeds `com.eojgroup.robur.widgets` and
+`com.eojgroup.robur.watchkitapp.widgets`. `prepare_app_store_profiles.rb` registers
+these explicit extension IDs if missing, enables HealthKit, and includes both
+profiles in signing/export. The API key needs Certificates, Identifiers & Profiles
+access. Widgets inherit the containing app's Health permission and do not require
+an App Group. Keep App Intent descriptions free of reserved platform names:
+Apple rejected 1.3 build 1000.22.1 for including “iPhone” and “Apple Watch” there.

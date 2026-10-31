@@ -32,6 +32,7 @@ targets:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: Apple Distribution
     dependencies:
+      - sdk: WidgetKit.framework
       - sdk: HealthKit.framework
       - sdk: CoreLocation.framework
       - sdk: CoreMotion.framework
@@ -40,6 +41,8 @@ targets:
       - sdk: WatchConnectivity.framework
       - sdk: Charts.framework
       - sdk: UserNotifications.framework
+      - target: Robur Widgets
+        embed: true
       - target: RoburWatch Watch App
         embed: true
   RoburWatch Watch App:
@@ -64,9 +67,73 @@ targets:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: Apple Distribution
     dependencies:
+      - sdk: WidgetKit.framework
       - sdk: HealthKit.framework
       - sdk: AppIntents.framework
       - sdk: WatchConnectivity.framework
+      - target: Robur Watch Widgets
+        embed: true
+  Robur Widgets:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Sources/RoburWidgets
+      - path: Sources/RoburShared/WorkoutHistory.swift
+      - path: Sources/RoburShared/WorkoutQuickReview.swift
+      - path: Sources/RoburShared/TrainingBalance.swift
+      - path: Sources/RoburShared/TrainingInsights.swift
+      - path: Sources/RoburShared/HealthInsights.swift
+      - path: Sources/RoburShared/WidgetHealthSummary.swift
+      - path: Resources/PrivacyInfo.xcprivacy
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.eojgroup.robur.widgets
+        PRODUCT_NAME: Robur Widgets
+        INFOPLIST_FILE: Sources/RoburWidgets/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/RoburWidgets/RoburWidgets.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Apple Distribution
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+      - sdk: HealthKit.framework
+  Robur Watch Widgets:
+    type: app-extension
+    platform: watchOS
+    deploymentTarget: "10.0"
+    sources:
+      - path: Sources/RoburWidgets
+        excludes: [Info.plist, RoburWidgets.entitlements]
+      - path: Sources/RoburWatchWidgets
+      - path: Sources/RoburShared/WorkoutHistory.swift
+      - path: Sources/RoburShared/WorkoutQuickReview.swift
+      - path: Sources/RoburShared/TrainingBalance.swift
+      - path: Sources/RoburShared/TrainingInsights.swift
+      - path: Sources/RoburShared/HealthInsights.swift
+      - path: Sources/RoburShared/WidgetHealthSummary.swift
+      - path: Resources/PrivacyInfo.xcprivacy
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.eojgroup.robur.watchkitapp.widgets
+        PRODUCT_NAME: Robur Watch Widgets
+        INFOPLIST_FILE: Sources/RoburWatchWidgets/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/RoburWatchWidgets/RoburWidgets.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Apple Distribution
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+      - sdk: HealthKit.framework
   RoburTests:
     type: bundle.unit-test
     platform: iOS
@@ -81,6 +148,8 @@ schemes:
       targets:
         Robur: all
         RoburWatch Watch App: all
+        Robur Widgets: all
+        Robur Watch Widgets: all
     run:
       config: Debug
     test:

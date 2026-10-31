@@ -153,7 +153,7 @@ active_profiles = request_json(
   token
 ).fetch("data", [])
 
-identifiers = [bundle_id, "#{bundle_id}.watchkitapp"]
+identifiers = [bundle_id, "#{bundle_id}.watchkitapp", "#{bundle_id}.widgets", "#{bundle_id}.watchkitapp.widgets"]
 profile_directory = File.join(Dir.home, "Library", "MobileDevice", "Provisioning Profiles")
 xcode_profile_directory = File.join(Dir.home, "Library", "Developer", "Xcode", "UserData", "Provisioning Profiles")
 FileUtils.mkdir_p(profile_directory)
@@ -168,11 +168,29 @@ identifiers.each do |identifier|
     token
   ).fetch("data", [])
   exact_bundle_ids = bundle_ids.select { |item| item.dig("attributes", "identifier") == identifier }
+  if exact_bundle_ids.empty? && identifier.end_with?(".widgets")
+    created = request_json(:post, "/v1/bundleIds", token, body: {
+      data: { type: "bundleIds", attributes: { identifier: identifier, name: identifier.include?("watchkitapp") ? "Robur Watch Widgets" : "Robur Widgets", platform: "IOS" } }
+    }).fetch("data")
+    exact_bundle_ids = [created]
+    puts "Registered widget extension #{identifier}."
+  end
   abort "Expected one exact registered bundle ID for #{identifier}, found #{exact_bundle_ids.length}" unless exact_bundle_ids.length == 1
 
   bundle_resource_id = exact_bundle_ids.first.fetch("id")
+  capabilities_changed = false
+  if identifier.end_with?(".widgets")
+    capabilities = request_json(:get, "/v1/bundleIds/#{bundle_resource_id}/bundleIdCapabilities?limit=200", token).fetch("data", [])
+    unless capabilities.any? { |item| item.dig("attributes", "capabilityType") == "HEALTHKIT" }
+      request_json(:post, "/v1/bundleIdCapabilities", token, body: {
+        data: { type: "bundleIdCapabilities", attributes: { capabilityType: "HEALTHKIT" },
+          relationships: { bundleId: { data: { type: "bundleIds", id: bundle_resource_id } } } }
+      })
+      capabilities_changed = true
+    end
+  end
   profile = active_profiles.find do |candidate|
-    candidate.dig("relationships", "bundleId", "data", "id") == bundle_resource_id &&
+    !capabilities_changed && candidate.dig("relationships", "bundleId", "data", "id") == bundle_resource_id &&
       active_profile?(candidate) &&
       candidate.dig("relationships", "certificates", "data").to_a.any? { |item| item["id"] == certificate_id }
   end
@@ -210,7 +228,9 @@ patch_release_signing(
   team_id,
   {
     "Robur" => profile_names.fetch(bundle_id),
-    "RoburWatch Watch App" => profile_names.fetch("#{bundle_id}.watchkitapp")
+    "RoburWatch Watch App" => profile_names.fetch("#{bundle_id}.watchkitapp"),
+    "Robur Widgets" => profile_names.fetch("#{bundle_id}.widgets"),
+    "Robur Watch Widgets" => profile_names.fetch("#{bundle_id}.watchkitapp.widgets")
   }
 )
 
