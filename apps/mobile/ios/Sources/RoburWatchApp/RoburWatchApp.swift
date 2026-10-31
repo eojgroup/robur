@@ -222,6 +222,7 @@ struct WatchMuscleReviewView: View {
   @State private var quick = WorkoutQuickReview()
   @State private var notes = ""
   @State private var loaded = false
+  @State private var showNotes = false
 
   var body: some View {
     NavigationStack {
@@ -231,7 +232,8 @@ struct WatchMuscleReviewView: View {
           Text("How did it go?").font(.title3.bold()).foregroundStyle(WatchTheme.beige)
           Text(workout.title + " · \(Int(workout.minutes)) min").font(.caption).foregroundStyle(.secondary)
           WorkoutReviewFields(workout: workout, muscles: $muscles, quick: $quick)
-          DisclosureGroup("Note (optional)") {
+          Button(showNotes ? "Hide note" : "Add note (optional)") { showNotes.toggle() }
+          if showNotes {
             TextField("Add a note", text: $notes)
               .onChange(of: notes) { _, value in if value.count > WorkoutReviewRules.maximumNotes { notes = String(value.prefix(WorkoutReviewRules.maximumNotes)) } }
             Text("Use dictation or the keyboard. \(notes.count)/\(WorkoutReviewRules.maximumNotes)").font(.caption2).foregroundStyle(.secondary)
@@ -256,6 +258,7 @@ struct WatchMuscleReviewView: View {
           muscles = WatchWorkoutRecorder.shared.muscleGroups
           notes = WatchWorkoutRecorder.shared.notes
         }
+        showNotes = !notes.isEmpty
         loaded = true
       }
     }
