@@ -180,7 +180,7 @@ identifiers.each do |identifier|
   bundle_resource_id = exact_bundle_ids.first.fetch("id")
   capabilities_changed = false
   if identifier.end_with?(".widgets")
-    capabilities = request_json(:get, "/v1/bundleIds/#{bundle_resource_id}/bundleIdCapabilities?limit=200", token).fetch("data", [])
+    capabilities = request_json(:get, "/v1/bundleIds/#{bundle_resource_id}/bundleIdCapabilities", token).fetch("data", [])
     unless capabilities.any? { |item| item.dig("attributes", "capabilityType") == "HEALTHKIT" }
       request_json(:post, "/v1/bundleIdCapabilities", token, body: {
         data: { type: "bundleIdCapabilities", attributes: { capabilityType: "HEALTHKIT" },
