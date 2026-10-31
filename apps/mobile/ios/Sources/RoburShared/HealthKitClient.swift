@@ -129,6 +129,9 @@ final class HealthKitClient: ObservableObject {
       HKObjectType.quantityType(forIdentifier: .restingHeartRate)!,
       HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN)!,
       HKObjectType.quantityType(forIdentifier: .distanceCycling)!,
+      HKObjectType.quantityType(forIdentifier: .stepCount)!,
+      HKObjectType.quantityType(forIdentifier: .appleExerciseTime)!,
+      HKObjectType.quantityType(forIdentifier: .vo2Max)!,
       HKObjectType.categoryType(forIdentifier: .sleepAnalysis)!
     ]
     #if os(iOS)
