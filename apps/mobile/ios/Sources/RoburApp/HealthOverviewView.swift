@@ -9,6 +9,13 @@ struct HealthOverviewView: View {
   @AppStorage("RoburExerciseGoal") private var exerciseGoal = 30.0
   @State private var selectedDay: Date?
   @State private var zoneWindow = 7
+  @State private var loadActivity: WorkoutActivity?
+  @State private var balanceDays = 28
+  @AppStorage("RoburTrainingBalanceCategories") private var balanceCategories = "endurance,strength,mobility"
+  @AppStorage("RoburTrainingBalanceActivities") private var balanceActivities = ""
+  @State private var editingTargets = false
+  @State private var draftCategories: Set<TrainingCategory> = []
+  @State private var draftActivities: Set<WorkoutActivity> = []
   @State private var cachedSummary: InsightsSummary?
 
   private var summary: InsightsSummary {
@@ -17,10 +24,11 @@ struct HealthOverviewView: View {
   private var latest: DailyHealthMetrics? { healthKit.dailyMetrics.filter { $0.date <= Date() }.max { $0.date < $1.date } }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 20) {
+    AdaptiveCardLayout {
       scoreCard
       activityCard
       loadCard
+      balanceCard
       heatmapCard
       trendCard
       zoneCard
@@ -30,15 +38,16 @@ struct HealthOverviewView: View {
       methodologyCard
     }
     .onChange(of: healthKit.dailyMetrics, initial: true) { _, _ in recalculate() }
-    .onChange(of: healthKit.workouts) { _, _ in recalculate() }
+    .onChange(of: healthKit.analyticsWorkouts) { _, _ in recalculate() }
     .onChange(of: journal.annotations) { _, _ in recalculate() }
     .onChange(of: maxHR) { _, _ in recalculate() }
     .onChange(of: stepsGoal) { _, _ in recalculate() }
     .onChange(of: exerciseGoal) { _, _ in recalculate() }
+    .sheet(isPresented: $editingTargets) { balanceTargetEditor }
   }
 
   private func recalculate() {
-    cachedSummary = TrainingInsights.make(days: healthKit.dailyMetrics, workouts: healthKit.workouts,
+    cachedSummary = TrainingInsights.make(days: healthKit.dailyMetrics, workouts: healthKit.analyticsWorkouts,
       annotations: journal.annotations, maxHR: maxHR, stepsGoal: stepsGoal, exerciseGoal: exerciseGoal)
   }
 
@@ -85,33 +94,195 @@ struct HealthOverviewView: View {
     }.roburCard()
   }
 
+  private var loadComparison: TrainingLoadSummary {
+    TrainingLoadComparison.make(workouts: healthKit.analyticsWorkouts, historyStart: healthKit.analyticsHistoryStart,
+      activity: loadActivity)
+  }
+
   private var loadCard: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      Label("Training load & recovery", systemImage: "bolt.heart").font(.headline)
+    let load = loadComparison
+    let graph = loadGraphSamples(load.points)
+    return VStack(alignment: .leading, spacing: 16) {
+      Label("Training load", systemImage: "chart.xyaxis.line").font(.headline)
+      Picker("Workout type", selection: $loadActivity) {
+        Text("All workouts").tag(WorkoutActivity?.none)
+        ForEach(WorkoutActivity.allCases) { activity in Text(activity.title).tag(Optional(activity)) }
+      }.pickerStyle(.menu)
       HStack(alignment: .firstTextBaseline) {
-        metricNumber(summary.load7, title: "7-day load", unit: "AU")
+        Text(load.changePercent.map { String(format: "%+.0f%%", $0) } ?? "—")
+          .font(.system(.largeTitle, design: .rounded, weight: .bold)).foregroundStyle(RoburStyle.orange)
+        Text(load.classification).font(.headline)
+      }
+      Text("7-day load compared with your 28-day baseline").font(.subheadline).foregroundStyle(.secondary)
+      if load.points.contains(where: { $0.changePercent != nil }) {
+        Chart {
+          ForEach(load.points, id: \.date) { point in
+            AreaMark(x: .value("Date", point.date), yStart: .value("Near baseline", -10), yEnd: .value("Near baseline", 10))
+              .foregroundStyle(RoburStyle.blue.opacity(0.07))
+          }
+          ForEach(graph) { sample in
+            LineMark(x: .value("Date", sample.date), y: .value("Change from baseline", sample.change))
+              .foregroundStyle(by: .value("Coverage segment", String(sample.segment)))
+              .lineStyle(StrokeStyle(lineWidth: 3))
+          }
+          RuleMark(y: .value("Baseline", 0)).foregroundStyle(RoburStyle.blue.opacity(0.6))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+        }.chartForegroundStyleScale(range: [RoburStyle.orange]).chartLegend(.hidden)
+          .chartYAxisLabel("%").frame(height: 190)
+      } else {
+        empty("Share Apple effort history to establish a comparison. Earlier history and usable ratings are needed for a 28-day baseline.")
+      }
+      HStack {
+        averageLoad(load.recent7Mean, title: "7-day average")
         Spacer()
-        metricNumber(summary.load28, title: "28-day load", unit: "AU")
+        averageLoad(load.baseline28Mean, title: "28-day baseline")
       }
-      Label(summary.loadStatus, systemImage: "gauge.with.dots.needle.50percent")
-        .font(.headline).foregroundStyle(RoburStyle.teal)
-      if let ratio = summary.loadRatio {
-        Text("7-day average / 28-day average: \(ratio, specifier: "%.2f")×")
-          .font(.caption).foregroundStyle(.secondary)
+      HStack {
+        Text("\(load.ratedSessions)/\(load.totalSessions) sessions with Apple effort")
+        Spacer(minLength: 8)
+        Text("\(load.reportedSessions) reported · \(load.estimatedSessions) estimated")
+      }.font(.caption).foregroundStyle(.secondary)
+      if let error = healthKit.effortImportError {
+        Text(error).font(.caption).foregroundStyle(.secondary)
+        Button("Review Health access") { healthKit.requestAuthorization() }
+      } else if let status = healthKit.effortImportStatus {
+        Text(status).font(.caption).foregroundStyle(.secondary)
       }
-      let beginning = Calendar.current.date(byAdding: .day, value: -27, to: Calendar.current.startOfDay(for: Date())) ?? Date()
-      let recent = summary.dailyLoad.filter { $0.date >= beginning && $0.date <= Date() }
-      if recent.contains(where: { $0.load > 0 }) {
-        Chart(recent, id: \.date) { day in
-          BarMark(x: .value("Day", day.date, unit: .day), y: .value("Session load", day.load))
-            .foregroundStyle(RoburStyle.amber.gradient).cornerRadius(3)
-          RuleMark(y: .value("28-day daily average", summary.load28 / 28))
-            .foregroundStyle(RoburStyle.blue).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
-        }.chartXScale(domain: beginning...Date()).chartYAxisLabel("AU").frame(height: 180)
-      } else { empty("Workouts with Apple effort or usable heart-rate data establish your load history.") }
-      Text("Load uses workout duration × Apple Fitness effort when available; heart-rate intensity is an estimate when effort is missing. A personal rating is the final fallback. Blue line: 28-day daily average. Load categories are planning heuristics, not an injury prediction.")
+      if load.totalSessions > 0 && load.ratedSessions == 0 && healthKit.effortImportError == nil {
+        Button("Review Health access") { healthKit.requestAuthorization() }
+      }
+      DisclosureGroup("What this comparison includes") {
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Uses duration × imported Apple effort. Reported Fitness ratings take priority over Apple estimates. Unrated sessions and Robur heart-rate/manual fallbacks are excluded from this comparison.")
+          Text("The shaded band is ±10% of baseline. This is Robur’s transparent 7/28-day comparison; it does not reproduce Apple’s proprietary training-load algorithm or predict injury.")
+          Text("Separate Robur session load: \(Int(summary.load7)) AU over 7 days, \(Int(summary.load28)) AU over 28 days. That total can include heart-rate estimates and personal ratings.")
+        }.font(.caption).foregroundStyle(.secondary).padding(.top, 6)
+      }.font(.caption)
+    }.roburCard()
+  }
+
+  private struct LoadGraphSample: Identifiable {
+    var id: Date { date }
+    let date: Date
+    let change: Double
+    let segment: Int
+  }
+
+  private func loadGraphSamples(_ points: [TrainingLoadPoint]) -> [LoadGraphSample] {
+    var segment = 0
+    return points.compactMap { point in
+      guard let change = point.changePercent else { segment += 1; return nil }
+      return LoadGraphSample(date: point.date, change: change, segment: segment)
+    }
+  }
+
+  private func averageLoad(_ value: Double?, title: String) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(title).font(.caption).foregroundStyle(.secondary)
+      Text(value.map { String(format: "%.0f AU/day", $0) } ?? "More history needed").font(.subheadline.bold())
+    }
+  }
+
+  private var selectedCategories: Set<TrainingCategory> {
+    Set(balanceCategories.split(separator: ",").compactMap { TrainingCategory(rawValue: String($0)) })
+  }
+  private var selectedActivities: Set<WorkoutActivity> {
+    Set(balanceActivities.split(separator: ",").compactMap { WorkoutActivity(rawValue: String($0)) })
+  }
+
+  private var balanceCard: some View {
+    let balance = TrainingBalance.make(workouts: healthKit.analyticsWorkouts, days: balanceDays,
+      expected: selectedCategories, expectedActivities: selectedActivities)
+    return VStack(alignment: .leading, spacing: 16) {
+      Label("Your training mix", systemImage: "chart.pie").font(.headline)
+      Picker("Training mix period", selection: $balanceDays) {
+        Text("7 days").tag(7)
+        Text("28 days").tag(28)
+        Text("90 days").tag(90)
+      }.pickerStyle(.segmented)
+      if balance.sessions > 0 {
+        HStack {
+          Text("\(balance.sessions) sessions").font(.title2.bold())
+          Spacer()
+          Text("\(Int(balance.totalMinutes)) min").foregroundStyle(.secondary)
+        }
+        Chart(balance.categories, id: \.category) { item in
+          SectorMark(angle: .value("Minutes", item.minutes), innerRadius: .ratio(0.64), angularInset: 2)
+            .foregroundStyle(balanceColor(item.category)).cornerRadius(4)
+        }.frame(height: 150)
+        ForEach(balance.categories, id: \.category) { item in
+          HStack {
+            Circle().fill(balanceColor(item.category)).frame(width: 9, height: 9)
+            Text(item.category.title)
+            Spacer()
+            Text("\(item.sessions) · \(Int(item.minutes)) min").monospacedDigit()
+          }.font(.caption)
+        }
+        Divider()
+        ForEach(balance.breakdown, id: \.activity) { item in
+          LabeledContent { Text("\(item.sessions) sessions · \(Int(item.minutes)) min") }
+            label: { Label(item.activity.title, systemImage: item.activity.symbol) }
+            .font(.subheadline)
+        }
+        let missing = balance.missing.map(\.title) + balance.missingActivities.map(\.title)
+        if !missing.isEmpty {
+          Label("Not recorded: " + missing.joined(separator: ", "), systemImage: "circle.dashed")
+            .font(.subheadline).foregroundStyle(RoburStyle.orange)
+        }
+      } else { empty("Import workouts to see your activity mix and compare it with your own targets.") }
+      Button("Choose balance targets") {
+        draftCategories = selectedCategories
+        draftActivities = selectedActivities
+        editingTargets = true
+      }
+      Text("Categories describe recorded workout types, not every adaptation an activity provides. Gaps reflect your chosen targets, not a requirement to play a particular sport. Missing or unshared workouts can also leave a gap.")
         .font(.caption).foregroundStyle(.secondary)
     }.roburCard()
+  }
+
+  private func balanceColor(_ category: TrainingCategory) -> Color {
+    switch category {
+    case .endurance: return RoburStyle.orange
+    case .strength: return RoburStyle.blue
+    case .mobility: return RoburStyle.amber.opacity(0.55)
+    case .sport: return RoburStyle.blue.opacity(0.5)
+    case .other: return .gray
+    }
+  }
+
+  private var balanceTargetEditor: some View {
+    NavigationStack {
+      Form {
+        Section("Categories you want to include") {
+          ForEach(TrainingCategory.allCases) { category in
+            Toggle(category.title, isOn: Binding(get: { draftCategories.contains(category) }, set: { value in
+              if value { draftCategories.insert(category) } else { draftCategories.remove(category) }
+            }))
+          }
+        }
+        Section("Optional specific activities") {
+          ForEach(WorkoutActivity.allCases) { activity in
+            Toggle(activity.title, isOn: Binding(get: { draftActivities.contains(activity) }, set: { value in
+              if value { draftActivities.insert(activity) } else { draftActivities.remove(activity) }
+            }))
+          }
+        }
+        Text("Save to confirm your own balance targets. No target changes automatically and no particular sport is required.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+      .scrollContentBackground(.hidden).background(RoburStyle.background)
+      .navigationTitle("Training balance")
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { editingTargets = false } }
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Save targets") {
+            balanceCategories = draftCategories.map(\.rawValue).sorted().joined(separator: ",")
+            balanceActivities = draftActivities.map(\.rawValue).sorted().joined(separator: ",")
+            editingTargets = false
+          }
+        }
+      }
+    }
   }
 
   private var heatmapDates: [Date] {
@@ -189,7 +360,7 @@ struct HealthOverviewView: View {
     let now = Date()
     let start = Calendar.current.date(byAdding: .day, value: -(zoneWindow - 1), to: Calendar.current.startOfDay(for: now)) ?? now
     var minutes = Array(repeating: 0.0, count: 5)
-    for workout in healthKit.workouts where workout.start >= start && workout.start <= now {
+    for workout in healthKit.analyticsWorkouts where workout.start >= start && workout.start <= now {
       for zone in TrainingInsights.heartZones(samples: workout.heartRateSamples, end: min(workout.end, now), maxHR: maxHR) {
         minutes[zone.zone - 1] += zone.minutes
       }

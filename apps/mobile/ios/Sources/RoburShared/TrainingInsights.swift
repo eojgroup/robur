@@ -157,7 +157,10 @@ enum TrainingInsights {
     }
     let monthlySessions = sessions.filter { $0.start >= since(29) }
     if !monthlySessions.isEmpty {
-      let strength = monthlySessions.filter { $0.title.localizedCaseInsensitiveContains("strength") }.count
+      let strength = monthlySessions.filter {
+        $0.activityType == .traditionalStrength || $0.activityType == .functionalStrength ||
+          ($0.activityType == .other && $0.title.localizedCaseInsensitiveContains("strength"))
+      }.count
       fitnessParts.append((InsightScore(title: "Strength", value: score(Double(strength) / 8 * 100),
         explanation: "10% fitness weight. Eight recorded strength sessions per 30 days maps to 100; it measures participation, not strength or muscle size."), 0.10))
     }
@@ -293,7 +296,9 @@ enum TrainingInsights {
     }
     for distance in [1.0, 5.0, 10.0] {
       let candidates = workouts.filter { workout in
-        guard workout.title.localizedCaseInsensitiveContains("run"), let km = workout.distanceKm else { return false }
+        guard workout.activityType == .running ||
+          (workout.activityType == .other && workout.title.localizedCaseInsensitiveContains("run")),
+          let km = workout.distanceKm else { return false }
         return km.isFinite && abs(km - distance) <= distance * 0.02
       }
       if let best = candidates.min(by: { $0.minutes < $1.minutes }) {

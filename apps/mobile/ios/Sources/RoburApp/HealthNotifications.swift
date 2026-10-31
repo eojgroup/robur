@@ -94,6 +94,7 @@ final class HealthNotificationManager: ObservableObject {
 struct HealthSettingsView: View {
   @EnvironmentObject private var healthKit: HealthKitClient
   @StateObject private var notifications = HealthNotificationManager.shared
+  @AppStorage("RoburAppearance") private var appearance = "system"
   @AppStorage("RoburDailyReminder") private var daily = false
   @AppStorage("RoburWeeklyReminder") private var weekly = false
   @AppStorage("RoburMovementReminder") private var movement = false
@@ -109,6 +110,13 @@ struct HealthSettingsView: View {
 
   var body: some View {
     Form {
+      Section("Appearance") {
+        Picker("Colour mode", selection: $appearance) {
+          Text("Follow device").tag("system")
+          Text("Light").tag("light")
+          Text("Dark").tag("dark")
+        }
+      }
       Section("Your goals") {
         Stepper("Steps: \(Int(pendingStepGoal)) / day", value: $pendingStepGoal, in: 1000...40000, step: 500)
         Stepper("Exercise: \(Int(pendingExerciseGoal)) min / day", value: $pendingExerciseGoal, in: 5...180, step: 5)
@@ -147,6 +155,8 @@ struct HealthSettingsView: View {
           .font(.caption).foregroundStyle(.secondary)
       }
     }
+    .scrollContentBackground(.hidden)
+    .background(RoburStyle.background)
     .navigationTitle("Goals & reminders")
     .task { await notifications.applySettings() }
     .onAppear { pendingStepGoal = stepsGoal; pendingExerciseGoal = exerciseGoal }

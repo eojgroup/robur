@@ -8,6 +8,7 @@ struct WorkoutHistoryView: View {
   @State private var muscle: MuscleGroup?
   @State private var gymID: UUID?
   @State private var selected: WorkoutRecord?
+  @State private var contentWidth: CGFloat = 360
 
   private var filtered: [WorkoutRecord] {
     healthKit.workouts.filter { workout in
@@ -30,6 +31,12 @@ struct WorkoutHistoryView: View {
             Text("Add what you trained, how it felt, and where you showed up.").foregroundStyle(.secondary)
           }
           HistoryRangePicker()
+          if let error = healthKit.effortImportError {
+            Text(error).font(.caption).foregroundStyle(.secondary)
+            Button("Review Health access") { healthKit.requestAuthorization() }
+          } else if let status = healthKit.effortImportStatus {
+            Text(status).font(.caption).foregroundStyle(.secondary)
+          }
           HStack {
             Menu {
               Button("All muscles") { muscle = nil }
@@ -47,14 +54,22 @@ struct WorkoutHistoryView: View {
             ContentUnavailableView("No workouts to show", systemImage: "figure.run",
               description: Text("Choose a wider history, clear filters, or share workouts in Apple Health. Workouts recorded with Apple Watch and other Health apps appear here after a refresh."))
           }
-          ForEach(filtered) { workout in
-            Button { selected = workout } label: {
-              WorkoutRow(workout: workout, annotation: journal.annotations[workout.id] ?? WorkoutAnnotation(),
-                         gymName: journal.gymName(journal.annotations[workout.id]?.gymID))
-            }.buttonStyle(.plain)
+          LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16, alignment: .top),
+            count: AdaptiveCardLayout.columnCount(for: contentWidth)), spacing: 16) {
+            ForEach(filtered) { workout in
+              Button { selected = workout } label: {
+                WorkoutRow(workout: workout, annotation: journal.annotations[workout.id] ?? WorkoutAnnotation(),
+                           gymName: journal.gymName(journal.annotations[workout.id]?.gymID))
+              }.buttonStyle(.plain)
+            }
           }
           HistoryPermissionView()
-        }.padding()
+        }.frame(maxWidth: RoburStyle.contentWidth)
+          .background { GeometryReader { proxy in
+            Color.clear.onAppear { contentWidth = proxy.size.width }
+              .onChange(of: proxy.size.width) { _, width in contentWidth = width }
+          } }
+          .padding().frame(maxWidth: .infinity)
       }
       .background(RoburStyle.background)
       .navigationTitle("Workouts").navigationBarTitleDisplayMode(.inline)
@@ -99,7 +114,7 @@ struct WorkoutRow: View {
   @ViewBuilder private var metrics: some View {
     Label("\(Int(workout.minutes)) min", systemImage: "clock")
     if let hr = workout.averageHeartRate { Label("\(Int(hr)) bpm", systemImage: "heart") }
-    Text(workout.appleEffort.map { String(format: "Apple effort %.1f/10", $0) }
+    Text(workout.appleEffort.map { String(format: "\(workout.effortSource?.title ?? "Apple effort") %.1f/10", $0) }
       ?? annotation.effort.map { "Personal effort \($0)/10" } ?? "Effort unavailable")
       .foregroundStyle(RoburStyle.amber)
   }
@@ -125,7 +140,7 @@ struct WorkoutDetailView: View {
   }
   private var comparablePace: Double? {
     let similar = healthKit.workouts.filter { item in
-      guard item.id != current.id, item.title == current.title, item.start < current.start,
+      guard item.id != current.id, item.activityType == current.activityType, item.title == current.title, item.start < current.start,
             item.start >= current.start.addingTimeInterval(-90 * 86_400),
             let km = item.distanceKm, km > 0,
             let currentKm = current.distanceKm, currentKm > 0 else { return false }
@@ -151,6 +166,7 @@ struct WorkoutDetailView: View {
             .font(.footnote).foregroundStyle(.secondary)
         }
       }
+      .scrollContentBackground(.hidden).background(RoburStyle.background)
       .navigationTitle("Workout analysis").navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -190,14 +206,19 @@ struct WorkoutDetailView: View {
     Section {
       if let effort = current.appleEffort {
         HStack {
-          Label("Apple Fitness effort", systemImage: "applewatch")
+          Label(current.effortSource?.title ?? "Apple effort", systemImage: "applewatch")
           Spacer()
           Text(String(format: "%.1f / 10", effort)).font(.title2.bold()).foregroundStyle(RoburStyle.amber)
         }
         ProgressView(value: effort, total: 10).tint(RoburStyle.amber)
       } else {
-        Text("No Apple Fitness effort was recorded or shared for this workout.")
+        Text("Apple effort is unavailable in Robur for this workout.")
           .font(.subheadline).foregroundStyle(.secondary)
+        if let error = healthKit.effortImportError { Text(error).font(.caption).foregroundStyle(.secondary) }
+        if let status = healthKit.effortImportStatus { Text(status).font(.caption).foregroundStyle(.secondary) }
+        Button("Review Health access") { healthKit.requestAuthorization() }
+        Text("If you can see a rating in Fitness, refresh Health access and reload this workout. Robur cannot tell a missing Health record from denied read access.")
+          .font(.caption).foregroundStyle(.secondary)
         Picker("Optional personal rating", selection: $draft.effort) {
           Text("Not rated").tag(Int?.none)
           ForEach(1...10, id: \.self) { value in Text("\(value) / 10").tag(Optional(value)) }
@@ -207,7 +228,7 @@ struct WorkoutDetailView: View {
         LabeledContent("Session load", value: "\(Int(load.rounded())) AU")
       }
     } header: { Text("Effort & load") }
-    footer: { Text("Apple Fitness effort takes priority. When unavailable, load can use sampled heart-rate intensity or your optional personal rating. AU means arbitrary units; this is a training estimate.") }
+    footer: { Text("Reported Apple Fitness ratings take priority over Apple estimates. When neither is available, Robur session load can use heart-rate intensity or your optional personal rating. These fallback loads remain separate from the Apple-effort comparison. AU means arbitrary units; this is a training estimate.") }
   }
 
   private var analysisSection: some View {

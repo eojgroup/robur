@@ -19,6 +19,30 @@ enum MuscleGroup: String, CaseIterable, Codable, Identifiable {
   var id: String { rawValue }
 }
 
+enum WorkoutEffortSource: String, Hashable, Codable {
+  case reported, estimated
+  var title: String {
+    switch self {
+    case .reported: return "Apple Fitness rating"
+    case .estimated: return "Apple estimated effort"
+    }
+  }
+}
+
+struct WorkoutEffortCandidate: Hashable {
+  let score: Double
+  let source: WorkoutEffortSource
+  let date: Date
+  var activityID: String? = nil
+  var durationMinutes: Double? = nil
+  var sampleID: String = ""
+}
+
+struct WorkoutEffortSelection: Hashable {
+  let score: Double
+  let source: WorkoutEffortSource
+}
+
 struct WorkoutRecord: Identifiable, Hashable {
   let id: String
   let start: Date
@@ -34,6 +58,8 @@ struct WorkoutRecord: Identifiable, Hashable {
   var heartRateSamples: [WorkoutHeartSample] = []
   var splits: [WorkoutSplit] = []
   var cadence: Double? = nil
+  var effortSource: WorkoutEffortSource? = nil
+  var activityType: WorkoutActivity = .other
 }
 
 struct FitnessReading: Identifiable, Hashable {
@@ -164,6 +190,33 @@ enum GymMonitoringPlan {
 
 // Shared by the Health importer and boundary tests; calendar days may be 23/25 hours.
 enum HealthImportMath {
+  /// A user rating wins over any estimate, even a newer estimate. A whole-workout
+  /// rating wins within that source; otherwise average latest ratings per activity.
+  static func effort(_ candidates: [WorkoutEffortCandidate]) -> WorkoutEffortSelection? {
+    let valid = candidates.filter { $0.score.isFinite && (1...10).contains($0.score) }
+    guard !valid.isEmpty else { return nil }
+    let source: WorkoutEffortSource = valid.contains { $0.source == .reported } ? .reported : .estimated
+    let preferred = valid.filter { $0.source == source }.sorted {
+      if $0.date != $1.date { return $0.date > $1.date }
+      if $0.sampleID != $1.sampleID { return $0.sampleID < $1.sampleID }
+      return $0.score < $1.score
+    }
+    if let whole = preferred.first(where: { $0.activityID == nil }) {
+      return WorkoutEffortSelection(score: whole.score, source: source)
+    }
+    var latest: [String: WorkoutEffortCandidate] = [:]
+    for sample in preferred {
+      if let activity = sample.activityID, latest[activity] == nil { latest[activity] = sample }
+    }
+    let samples = latest.keys.sorted().compactMap { latest[$0] }
+    let weighted = samples.allSatisfy { ($0.durationMinutes ?? 0).isFinite && ($0.durationMinutes ?? 0) > 0 }
+    let weights = samples.map { weighted ? ($0.durationMinutes ?? 1) : 1 }
+    let total = weights.reduce(0, +)
+    guard total > 0 else { return nil }
+    let value = zip(samples, weights).reduce(0.0) { $0 + $1.0.score * $1.1 } / total
+    return WorkoutEffortSelection(score: value, source: source)
+  }
+
   static func sleepMinutes(intervals: [DateInterval], calendar: Calendar, wakingDay: Bool = false) -> [Date: Double] {
     let sorted = intervals.filter { $0.duration > 0 }.sorted { $0.start < $1.start }
     var merged: [DateInterval] = []

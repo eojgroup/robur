@@ -2,24 +2,68 @@ import SwiftUI
 
 // Semantic surfaces follow light/dark mode; colour never carries meaning alone.
 enum RoburStyle {
-  static let teal = adaptive(light: UIColor(red: 0.02, green: 0.42, blue: 0.41, alpha: 1), dark: UIColor(red: 0.33, green: 0.84, blue: 0.76, alpha: 1))
-  static let amber = adaptive(light: UIColor(red: 0.65, green: 0.31, blue: 0.02, alpha: 1), dark: UIColor(red: 1, green: 0.72, blue: 0.33, alpha: 1))
-  static let blue = adaptive(light: UIColor(red: 0.23, green: 0.40, blue: 0.80, alpha: 1), dark: UIColor(red: 0.53, green: 0.69, blue: 1, alpha: 1))
+  static let navy = Color(red: 0.055, green: 0.10, blue: 0.18)
+  static let beige = Color(red: 0.95, green: 0.91, blue: 0.83)
+  static let orange = adaptive(light: UIColor(red: 0.66, green: 0.25, blue: 0.055, alpha: 1), dark: UIColor(red: 1, green: 0.64, blue: 0.32, alpha: 1))
+  // Compatibility names keep existing screens on the same shared palette.
+  static let teal = orange
+  static let amber = adaptive(light: UIColor(red: 0.73, green: 0.32, blue: 0.055, alpha: 1), dark: UIColor(red: 1, green: 0.72, blue: 0.43, alpha: 1))
+  static let blue = adaptive(light: UIColor(red: 0.09, green: 0.17, blue: 0.28, alpha: 1), dark: UIColor(red: 0.90, green: 0.85, blue: 0.75, alpha: 1))
+  static let ink = adaptive(light: UIColor(red: 0.055, green: 0.10, blue: 0.18, alpha: 1), dark: UIColor(red: 0.96, green: 0.93, blue: 0.87, alpha: 1))
+  static let background = adaptive(light: UIColor(red: 0.96, green: 0.94, blue: 0.90, alpha: 1), dark: UIColor(red: 0.035, green: 0.065, blue: 0.11, alpha: 1))
+  static let surface = adaptive(light: UIColor(red: 1, green: 0.99, blue: 0.965, alpha: 1), dark: UIColor(red: 0.07, green: 0.115, blue: 0.185, alpha: 1))
+  static let contentWidth: CGFloat = 1240
   private static func adaptive(light: UIColor, dark: UIColor) -> Color {
     Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? dark : light })
   }
-  static let background = Color(uiColor: .systemGroupedBackground)
-  static let surface = Color(uiColor: .secondarySystemGroupedBackground)
+}
+
+/// Uses the available window width, so iPad Split View also falls back to one column.
+struct AdaptiveCardLayout: Layout {
+  var spacing: CGFloat = 20
+  static func columnCount(for width: CGFloat) -> Int { width >= 760 ? 2 : 1 }
+
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    let width = max(0, proposal.width ?? 360)
+    let columns = Self.columnCount(for: width)
+    let columnWidth = max(0, (width - CGFloat(columns - 1) * spacing) / CGFloat(columns))
+    var height: CGFloat = 0
+    for first in stride(from: 0, to: subviews.count, by: columns) {
+      let rowHeight = (first..<min(first + columns, subviews.count)).map {
+        subviews[$0].sizeThatFits(ProposedViewSize(width: columnWidth, height: nil)).height
+      }.max() ?? 0
+      height += rowHeight + (first == 0 ? 0 : spacing)
+    }
+    return CGSize(width: width, height: height)
+  }
+
+  func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    let columns = Self.columnCount(for: bounds.width)
+    let columnWidth = max(0, (bounds.width - CGFloat(columns - 1) * spacing) / CGFloat(columns))
+    var y = bounds.minY
+    for first in stride(from: 0, to: subviews.count, by: columns) {
+      let rowHeight = (first..<min(first + columns, subviews.count)).map {
+        subviews[$0].sizeThatFits(ProposedViewSize(width: columnWidth, height: nil)).height
+      }.max() ?? 0
+      for index in first..<min(first + columns, subviews.count) {
+        subviews[index].place(at: CGPoint(x: bounds.minX + CGFloat(index - first) * (columnWidth + spacing), y: y),
+          anchor: .topLeading, proposal: ProposedViewSize(width: columnWidth, height: nil))
+      }
+      y += rowHeight + spacing
+    }
+  }
 }
 
 extension View {
   func roburCard() -> some View {
     self.padding(20).frame(maxWidth: .infinity, alignment: .leading)
       .background(RoburStyle.surface, in: RoundedRectangle(cornerRadius: 24))
+      .overlay { RoundedRectangle(cornerRadius: 24).stroke(RoburStyle.ink.opacity(0.06), lineWidth: 1) }
   }
 }
 
 struct RoburRootView: View {
+  @AppStorage("RoburAppearance") private var appearance = "system"
   @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var healthKit: HealthKitClient
   @EnvironmentObject private var journal: WorkoutJournal
@@ -30,7 +74,9 @@ struct RoburRootView: View {
       FitnessHistoryView().tabItem { Label("Progress", systemImage: "chart.xyaxis.line") }
       GymLocationsView().tabItem { Label("Places", systemImage: "mappin.and.ellipse") }
     }
-    .tint(RoburStyle.teal)
+    .tint(RoburStyle.orange)
+    .foregroundStyle(RoburStyle.ink)
+    .preferredColorScheme(appearance == "dark" ? .dark : (appearance == "light" ? .light : nil))
     .onChange(of: scenePhase) { _, phase in
       if phase == .active && (healthKit.lastUpdated.map { Date().timeIntervalSince($0) > 900 } ?? true) {
         Task { await healthKit.refreshTodaySnapshot() }

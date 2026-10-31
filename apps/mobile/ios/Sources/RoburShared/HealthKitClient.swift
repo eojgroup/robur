@@ -13,6 +13,12 @@ final class HealthKitClient: ObservableObject {
 
   #if os(iOS)
   @Published private(set) var workouts: [WorkoutRecord] = []
+  @Published private(set) var analyticsWorkouts: [WorkoutRecord] = []
+  @Published private(set) var analyticsHistoryStart: Date?
+  @Published private(set) var effortImportStatus: String?
+  @Published private(set) var effortImportError: String?
+  @Published private(set) var needsHealthAuthorizationReview = false
+  private var effortCandidates: [String: [WorkoutEffortCandidate]] = [:]
   @Published private(set) var fitnessReadings: [FitnessReading] = []
   @Published private(set) var dailyMetrics: [DailyHealthMetrics] = []
   @Published private(set) var profile = HealthProfile()
@@ -382,6 +388,8 @@ extension HealthKitClient {
                    previewDays: [DailyHealthMetrics] = [], previewProfile: HealthProfile = HealthProfile()) {
     self.init(defaults: defaults)
     workouts = previewWorkouts
+    analyticsWorkouts = previewWorkouts
+    analyticsHistoryStart = previewWorkouts.map(\.start).min()
     fitnessReadings = previewReadings
     dailyMetrics = previewDays
     profile = previewProfile
@@ -397,7 +405,9 @@ extension HealthKitClient {
     historyRequest = request
     isLoadingHistory = true
     historyError = nil
+    effortImportError = nil
     defer { if historyRequest == request { isLoadingHistory = false } }
+    await refreshHealthAuthorizationReview()
     let now = Date()
     let visibleStart = range.startDate(now: now) ?? store.earliestPermittedSampleDate()
     // Analytics always retain enough data for independent 7/28/30/90-day baselines.
@@ -411,15 +421,18 @@ extension HealthKitClient {
       let samples = try await workoutSamples
       let history = await healthHistory
       let profileResult = await userProfile
-      let effortScores = await effort
+      let effortResult = await effort
+      let effortScores = effortResult.values
       guard historyRequest == request else { return }
       let imported = samples.compactMap { $0 as? HKWorkout }
       let recentHeart = await readRecentWorkoutHeartRates(imported, now: now)
       guard historyRequest == request else { return }
       rawWorkouts = Dictionary(uniqueKeysWithValues: imported.map { ($0.uuid.uuidString, $0) })
       loadedWorkoutDetails = []
-      // The shortest journal range still includes the full 28-day training-load window.
-      workouts = imported.filter { $0.startDate >= visibleStart }.map { workout in
+      effortCandidates = effortResult.candidates
+      effortImportError = effortResult.error
+      analyticsHistoryStart = healthStart
+      analyticsWorkouts = imported.map { workout in
         let heartType = HKQuantityType.quantityType(forIdentifier: .heartRate)!
         let energyType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned)!
         let info = Self.workoutPresentation(workout.workoutActivityType)
@@ -428,9 +441,13 @@ extension HealthKitClient {
           distanceKm: workout.totalDistance?.doubleValue(for: .meterUnit(with: .kilo)),
           energyKcal: workout.statistics(for: energyType)?.sumQuantity()?.doubleValue(for: .kilocalorie()),
           averageHeartRate: workout.statistics(for: heartType)?.averageQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute())),
-          source: workout.sourceRevision.source.name, appleEffort: effortScores[workout.uuid.uuidString],
-          heartRateSamples: recentHeart[workout.uuid.uuidString] ?? [])
+          source: workout.sourceRevision.source.name, appleEffort: effortScores[workout.uuid.uuidString]?.score,
+          heartRateSamples: recentHeart[workout.uuid.uuidString] ?? [],
+          effortSource: effortScores[workout.uuid.uuidString]?.source,
+          activityType: Self.workoutActivity(workout.workoutActivityType))
       }
+      workouts = analyticsWorkouts.filter { $0.start >= visibleStart }
+      updateEffortStatus()
       fitnessReadings = history.readings.filter { $0.date >= Calendar.current.startOfDay(for: visibleStart) && $0.date <= now }
       dailyMetrics = history.days.filter { $0.date <= now }
       profile = profileResult
@@ -440,41 +457,120 @@ extension HealthKitClient {
     }
   }
 
-  /// Uses Apple's actual workout/effort relationships, never timestamp-based guesses.
-  private func readWorkoutEffort() async -> [String: Double] {
-    guard #available(iOS 18.0, *) else { return [:] }
+  func refreshHealthAuthorizationReview() async {
+    // The old authorizationRequested flag only records that a sheet was shown.
+    // It does not mean newly introduced read types have ever been requested.
+    let status = try? await store.statusForAuthorizationRequest(toShare: [], read: readTypes)
+    needsHealthAuthorizationReview = status == .shouldRequest
+  }
+
+  private struct EffortImportResult {
+    var values: [String: WorkoutEffortSelection] = [:]
+    var candidates: [String: [WorkoutEffortCandidate]] = [:]
+    var error: String? = nil
+  }
+
+  /// Import all scopes, including the workout's default activity. Older versions
+  /// discarded non-nil activities, which silently omitted real Fitness ratings.
+  private func readWorkoutEffort() async -> EffortImportResult {
+    guard #available(iOS 18.0, *) else {
+      return EffortImportResult(error: "Apple Fitness effort requires iOS 18 or later.")
+    }
     do {
       let relationships: [HKWorkoutEffortRelationship] = try await withCheckedThrowingContinuation { continuation in
-        let query = HKWorkoutEffortRelationshipQuery(predicate: nil, anchor: nil, options: .mostRelevant) { _, relationships, _, error in
+        let query = HKWorkoutEffortRelationshipQuery(predicate: nil, anchor: nil, options: .default) { _, relationships, _, error in
           if let error { continuation.resume(throwing: error) }
           else { continuation.resume(returning: relationships ?? []) }
         }
         store.execute(query)
       }
-      var result: [String: Double] = [:]
-      for relationship in relationships where relationship.activity == nil {
-        let candidates = (relationship.samples ?? []).compactMap { $0 as? HKQuantitySample }
-          .filter { $0.quantityType.identifier == HKQuantityTypeIdentifier.workoutEffortScore.rawValue ||
-            $0.quantityType.identifier == HKQuantityTypeIdentifier.estimatedWorkoutEffortScore.rawValue }
-          .sorted { $0.endDate > $1.endDate }
-        let actual = candidates.first { $0.quantityType.identifier == HKQuantityTypeIdentifier.workoutEffortScore.rawValue }
-        let sample = actual ?? candidates.first
-        if let score = sample?.quantity.doubleValue(for: .appleEffortScore()), score.isFinite, (1...10).contains(score) {
-          result[relationship.workout.uuid.uuidString] = score
-        }
+      var result = EffortImportResult()
+      for relationship in relationships {
+        let id = relationship.workout.uuid.uuidString
+        let values = effortValues(samples: relationship.samples ?? [], activity: relationship.activity)
+        result.candidates[id, default: []].append(contentsOf: values)
       }
+      result.values = result.candidates.compactMapValues { HealthImportMath.effort($0) }
       return result
     } catch {
-      // Denied/new data categories must not hide previously approved workout history.
-      return [:]
+      return EffortImportResult(error: "Effort relationships could not be read: \(error.localizedDescription). Review Health access or open a workout to retry its effort.")
+    }
+  }
+
+  @available(iOS 18.0, *)
+  private func effortValues(samples: [HKSample], activity: HKWorkoutActivity?) -> [WorkoutEffortCandidate] {
+    samples.compactMap { sample in
+      guard let quantity = sample as? HKQuantitySample else { return nil }
+      let source: WorkoutEffortSource
+      switch quantity.quantityType.identifier {
+      case HKQuantityTypeIdentifier.workoutEffortScore.rawValue: source = .reported
+      case HKQuantityTypeIdentifier.estimatedWorkoutEffortScore.rawValue: source = .estimated
+      default: return nil
+      }
+      return WorkoutEffortCandidate(score: quantity.quantity.doubleValue(for: .appleEffortScore()),
+        source: source, date: quantity.endDate, activityID: activity?.uuid.uuidString,
+        durationMinutes: activity.map { $0.duration / 60 }, sampleID: quantity.uuid.uuidString)
+    }
+  }
+
+  private func refreshRelatedEffort(for workout: HKWorkout) async {
+    guard #available(iOS 18.0, *) else { return }
+    let id = workout.uuid.uuidString
+    var candidates = effortCandidates[id] ?? []
+    var failures = 0
+    // Association predicates, not timestamps, recover scores missing from the
+    // relationship query. Activity scores can live on any constituent activity.
+    let scopes: [HKWorkoutActivity?] = [nil] + workout.workoutActivities.map { Optional($0) }
+    for activity in scopes {
+      let predicate = HKQuery.predicateForWorkoutEffortSamplesRelated(workout: workout, activity: activity)
+      let identifiers: [HKQuantityTypeIdentifier] = [.workoutEffortScore, .estimatedWorkoutEffortScore]
+      for identifier in identifiers {
+        do {
+          let samples = try await associatedSamples(identifier: identifier, predicate: predicate)
+          candidates.append(contentsOf: effortValues(samples: samples, activity: activity))
+        } catch { failures += 1 }
+      }
+    }
+    candidates = Array(Set(candidates))
+    effortCandidates[id] = candidates
+    if let selection = HealthImportMath.effort(candidates) {
+      if let index = workouts.firstIndex(where: { $0.id == id }) {
+        workouts[index].appleEffort = selection.score
+        workouts[index].effortSource = selection.source
+      }
+      if let index = analyticsWorkouts.firstIndex(where: { $0.id == id }) {
+        analyticsWorkouts[index].appleEffort = selection.score
+        analyticsWorkouts[index].effortSource = selection.source
+      }
+    }
+    if failures > 0 {
+      effortImportError = "Some associated effort data could not be read. Available ratings are still shown; review Robur's Health access and retry."
+    }
+    updateEffortStatus()
+  }
+
+  private func updateEffortStatus() {
+    guard #available(iOS 18.0, *) else {
+      effortImportStatus = "Apple Fitness effort requires iOS 18 or later."
+      return
+    }
+    let reported = workouts.filter { $0.effortSource == .reported }.count
+    let estimated = workouts.filter { $0.effortSource == .estimated }.count
+    if reported + estimated > 0 {
+      effortImportStatus = "\(reported) Fitness ratings · \(estimated) Apple estimates. Recorded ratings take priority over estimates."
+    } else {
+      let review = needsHealthAuthorizationReview ? "New Health categories need review. Use Access to request workout effort, then refresh. " : ""
+      effortImportStatus = review + "No Apple Fitness effort shared for these workouts. Review workout effort in Robur's Health access, then refresh. Opening a workout retries its associated ratings."
     }
   }
 
   func loadWorkoutDetails(id: String) async {
-    guard !loadedWorkoutDetails.contains(id), !workoutDetailsLoading.contains(id), let workout = rawWorkouts[id] else { return }
+    guard !workoutDetailsLoading.contains(id), let workout = rawWorkouts[id] else { return }
     workoutDetailsLoading.insert(id)
     defer { workoutDetailsLoading.remove(id) }
     workoutDetailsError = nil
+    await refreshRelatedEffort(for: workout)
+    guard !loadedWorkoutDetails.contains(id) else { return }
     do {
       let associated = HKQuery.predicateForObjects(from: workout)
       async let heart = try? associatedSamples(identifier: .heartRate, predicate: associated)
@@ -513,6 +609,11 @@ extension HealthKitClient {
         workouts[index].heartRateSamples = heartValues
         workouts[index].splits = splits
         if totalSteps > 0 && workout.duration > 0 { workouts[index].cadence = totalSteps / (workout.duration / 60) }
+      }
+      if let index = analyticsWorkouts.firstIndex(where: { $0.id == id }) {
+        analyticsWorkouts[index].heartRateSamples = heartValues
+        analyticsWorkouts[index].splits = splits
+        if totalSteps > 0 && workout.duration > 0 { analyticsWorkouts[index].cadence = totalSteps / (workout.duration / 60) }
       }
       if heartResult != nil && stepsResult != nil && distanceResult != nil { loadedWorkoutDetails.insert(id) }
       else { workoutDetailsError = "Some workout details are unavailable. Approved data is still shown; reopen to retry." }
@@ -700,7 +801,25 @@ extension HealthKitClient {
     }
   }
 
-  private static func workoutPresentation(_ type: HKWorkoutActivityType) -> (String, String) {
+  static func workoutActivity(_ type: HKWorkoutActivityType) -> WorkoutActivity {
+    switch type {
+    case .running: return .running
+    case .cycling: return .cycling
+    case .walking: return .walking
+    case .swimming: return .swimming
+    case .tennis: return .tennis
+    case .badminton, .pickleball, .racquetball, .squash, .tableTennis: return .racketSports
+    case .traditionalStrengthTraining: return .traditionalStrength
+    case .functionalStrengthTraining: return .functionalStrength
+    case .highIntensityIntervalTraining: return .hiit
+    case .yoga, .pilates, .flexibility, .mindAndBody, .taiChi, .barre, .preparationAndRecovery, .cooldown: return .mobility
+    case .hiking: return .hiking
+    case .rowing: return .rowing
+    default: return .other
+    }
+  }
+
+  static func workoutPresentation(_ type: HKWorkoutActivityType) -> (String, String) {
     switch type {
     case .running: return ("Run", "figure.run")
     case .cycling: return ("Cycle", "figure.outdoor.cycle")
@@ -709,15 +828,57 @@ extension HealthKitClient {
     case .walking: return ("Walk", "figure.walk")
     case .hiking: return ("Hike", "figure.hiking")
     case .swimming: return ("Swim", "figure.pool.swim")
+    case .tennis: return ("Tennis", "figure.tennis")
+    case .badminton: return ("Badminton", "figure.badminton")
+    case .pickleball: return ("Pickleball", "figure.pickleball")
+    case .racquetball: return ("Racquetball", "figure.racquetball")
+    case .squash: return ("Squash", "figure.squash")
+    case .tableTennis: return ("Table tennis", "figure.table.tennis")
     case .yoga: return ("Yoga", "figure.yoga")
     case .pilates: return ("Pilates", "figure.pilates")
     case .highIntensityIntervalTraining: return ("Intervals", "bolt.heart.fill")
     case .rowing: return ("Row", "figure.rower")
     case .elliptical: return ("Elliptical", "figure.elliptical")
-    case .stairClimbing: return ("Stairs", "figure.stair.stepper")
-    case .dance: return ("Dance", "figure.dance")
+    case .stairClimbing, .stairs, .stepTraining: return ("Stairs", "figure.stair.stepper")
+    case .dance, .cardioDance, .socialDance: return ("Dance", "figure.dance")
     case .coreTraining: return ("Core", "figure.core.training")
-    default: return ("Workout", "figure.mixed.cardio")
+    case .flexibility: return ("Flexibility", "figure.flexibility")
+    case .taiChi: return ("Tai chi", "figure.taichi")
+    case .barre: return ("Barre", "figure.barre")
+    case .mindAndBody: return ("Mind and body", "figure.mind.and.body")
+    case .preparationAndRecovery, .cooldown: return ("Recovery", "figure.cooldown")
+    case .mixedCardio, .crossTraining: return ("Mixed cardio", "figure.mixed.cardio")
+    case .soccer: return ("Football", "figure.soccer")
+    case .basketball: return ("Basketball", "figure.basketball")
+    case .volleyball: return ("Volleyball", "figure.volleyball")
+    case .baseball: return ("Baseball", "figure.baseball")
+    case .softball: return ("Softball", "figure.softball")
+    case .golf: return ("Golf", "figure.golf")
+    case .boxing: return ("Boxing", "figure.boxing")
+    case .kickboxing: return ("Kickboxing", "figure.kickboxing")
+    case .martialArts: return ("Martial arts", "figure.martial.arts")
+    case .wrestling: return ("Wrestling", "figure.wrestling")
+    case .climbing: return ("Climbing", "figure.climbing")
+    case .skatingSports: return ("Skating", "figure.skating")
+    case .snowboarding: return ("Snowboarding", "figure.snowboarding")
+    case .downhillSkiing: return ("Downhill skiing", "figure.skiing.downhill")
+    case .crossCountrySkiing: return ("Cross-country skiing", "figure.skiing.crosscountry")
+    case .paddleSports: return ("Paddling", "figure.rower")
+    case .surfingSports: return ("Surfing", "figure.surfing")
+    case .waterFitness: return ("Water fitness", "figure.water.fitness")
+    case .waterPolo: return ("Water polo", "figure.waterpolo")
+    case .waterSports: return ("Water sport", "figure.water.fitness")
+    case .jumpRope: return ("Jump rope", "figure.jumprope")
+    case .trackAndField: return ("Track and field", "figure.track.and.field")
+    case .handball: return ("Handball", "figure.handball")
+    case .rugby: return ("Rugby", "figure.rugby")
+    case .americanFootball: return ("American football", "figure.american.football")
+    case .australianFootball: return ("Australian football", "figure.australian.football")
+    case .hockey: return ("Hockey", "figure.hockey")
+    case .gymnastics: return ("Gymnastics", "figure.gymnastics")
+    case .equestrianSports: return ("Equestrian", "figure.equestrian.sports")
+    case .fitnessGaming: return ("Fitness gaming", "figure.play")
+    default: return ("Other workout", "figure.mixed.cardio")
     }
   }
 }

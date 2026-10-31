@@ -126,4 +126,15 @@ final class TrainingInsightsTests: XCTestCase {
     XCTAssertTrue(report.contains("VO₂ max average"))
   }
 
+  func testStrengthScoreUsesRecordedActivityTypeRatherThanDisplayTitle() {
+    let days = (-29...0).map { DailyHealthMetrics(date: day($0), steps: 9_000) }
+    var session = workout("functional", offset: -1)
+    session.activityType = .functionalStrength
+    let typed = summary(days: days, workouts: [session]).scores.first { $0.title == "Strength" }
+    XCTAssertEqual(typed?.value, 13)
+    session.activityType = .tennis
+    let tennis = summary(days: days, workouts: [session]).scores.first { $0.title == "Strength" }
+    XCTAssertEqual(tennis?.value, 0)
+  }
+
 }

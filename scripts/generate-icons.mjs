@@ -66,7 +66,7 @@ function lerp(a, b, t) {
 
 function png(width, height) {
   const raw = Buffer.alloc((width * 3 + 1) * height);
-  // An opaque, anti-aliased R monogram with an oak-leaf accent. iOS supplies
+  // An opaque, anti-aliased heart-rate symbol in navy, warm beige and orange. iOS supplies
   // the rounded icon mask; retaining full square corners avoids double masks.
   const samples = [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]];
   const segmentDistance = (x, y, ax, ay, bx, by) => {
@@ -81,17 +81,18 @@ function png(width, height) {
       const rgb = [0, 0, 0];
       for (const [sx, sy] of samples) {
         const u = (x + sx) / width, v = (y + sy) / height;
-        const glow = Math.max(0, 1 - Math.hypot(u - 0.92, v - 0.95) / 1.2);
-        const bg = [lerp(10, 15, glow), lerp(22, 74, glow), lerp(39, 79, glow)];
-        const stem = segmentDistance(u, v, 0.32, 0.28, 0.32, 0.74) <= 0.043;
-        const ellipse = Math.hypot((u - 0.455) / 0.19, (v - 0.405) / 0.155);
-        const bow = u >= 0.32 && Math.abs(ellipse - 1) <= 0.22;
-        const leg = segmentDistance(u, v, 0.47, 0.54, 0.685, 0.74) <= 0.043;
-        const leafX = (u - 0.73) * 0.8 - (v - 0.235) * 0.6;
-        const leafY = (u - 0.73) * 0.6 + (v - 0.235) * 0.8;
-        const leaf = (leafX * leafX / 0.0049 + leafY * leafY / 0.000625) <= 1;
-        const mark = stem || bow || leg;
-        const ink = leaf ? [105, 231, 191] : mark ? [lerp(239, 100, v), lerp(255, 228, v), lerp(252, 212, v)] : bg;
+        const glow = Math.max(0, 1 - Math.hypot(u - 0.85, v - 0.9) / 1.3);
+        const bg = [lerp(10, 22, glow), lerp(22, 43, glow), lerp(42, 67, glow)];
+        const ticker = [[0.18, 0.53], [0.34, 0.53], [0.405, 0.39], [0.485, 0.695], [0.575, 0.285], [0.665, 0.53], [0.82, 0.53]];
+        let outer = false, pulse = false;
+        for (let part = 0; part < ticker.length - 1; part += 1) {
+          const distance = segmentDistance(u, v, ...ticker[part], ...ticker[part + 1]);
+          if (distance <= 0.033) {
+            outer = true;
+            if (part >= 1 && part <= 4) pulse = true;
+          }
+        }
+        const ink = pulse ? [lerp(244, 232, v), lerp(145, 105, v), lerp(70, 36, v)] : outer ? [244, 234, 214] : bg;
         for (let c = 0; c < 3; c += 1) rgb[c] += ink[c] / samples.length;
       }
       const i = row + 1 + x * 3;

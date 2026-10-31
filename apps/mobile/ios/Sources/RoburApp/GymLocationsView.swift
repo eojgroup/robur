@@ -223,6 +223,7 @@ struct GymLocationsView: View {
           }
         } footer: { Text("Stand at your gym to save its position. You can save a name without location permission.") }
       }
+      .scrollContentBackground(.hidden).background(RoburStyle.background)
       .navigationTitle("Add place")
       .toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { adding = false } }

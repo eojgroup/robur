@@ -14,11 +14,15 @@ final class AppPresentationTests: XCTestCase {
     let now = Date()
     let workouts = (0..<12).map { index -> WorkoutRecord in
       let start = Calendar.current.date(byAdding: .day, value: -(index * 3 + 1), to: now)!
-      return WorkoutRecord(id: "preview-\(index)", start: start, end: start.addingTimeInterval(2700),
-        title: index.isMultiple(of: 2) ? "Strength" : "Run", symbol: index.isMultiple(of: 2) ? "dumbbell.fill" : "figure.run",
-        minutes: 45, distanceKm: index.isMultiple(of: 2) ? nil : 6.5, energyKcal: 320,
+      let activity = [WorkoutActivity.functionalStrength, .running, .cycling, .tennis][index % 4]
+      var record = WorkoutRecord(id: "preview-\(index)", start: start, end: start.addingTimeInterval(2700),
+        title: activity.title, symbol: activity.symbol,
+        minutes: 45, distanceKm: activity == .running ? 6.5 : nil, energyKcal: 320,
         averageHeartRate: 135, source: "Presentation test", appleEffort: Double(5 + index % 4),
         heartRateSamples: (0..<45).map { minute in WorkoutHeartSample(date: start.addingTimeInterval(Double(minute) * 60), bpm: 115 + Double(minute % 40)) })
+      record.activityType = activity
+      record.effortSource = index % 3 == 0 ? .estimated : .reported
+      return record
     }
     let readings = (0..<40).map { index -> FitnessReading in
       let date = Calendar.current.date(byAdding: .day, value: -(index + 1), to: now)!
@@ -43,16 +47,22 @@ final class AppPresentationTests: XCTestCase {
       ("today", AnyView(RoburTodayView())),
       ("workouts", AnyView(WorkoutHistoryView())),
       ("progress", AnyView(FitnessHistoryView())),
+      ("insights", AnyView(ScrollView { HealthOverviewView().frame(maxWidth: RoburStyle.contentWidth).padding().frame(maxWidth: .infinity) }
+        .background(RoburStyle.background))),
       ("places", AnyView(GymLocationsView()))
     ]
     let output = FileManager.default.temporaryDirectory.appendingPathComponent("robur-previews")
     try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     let originalWindow = scene.windows.first { $0.isKeyWindow }
+    let isPad = UIDevice.current.userInterfaceIdiom == .pad
+    if isPad { XCTAssertGreaterThanOrEqual(scene.coordinateSpace.bounds.width, 700, "iPad previews must use a real tablet-sized scene") }
+    let device = isPad ? "ipad" : "iphone"
     defer { originalWindow?.makeKeyAndVisible() }
     for (name, screen) in screens {
       for dark in [false, true] {
-        let controller = UIHostingController(rootView: screen.environmentObject(health).environmentObject(journal).environmentObject(monitor))
+        let controller = UIHostingController(rootView: screen.environmentObject(health).environmentObject(journal).environmentObject(monitor)
+          .tint(RoburStyle.orange).foregroundStyle(RoburStyle.ink))
         let window = UIWindow(windowScene: scene)
         window.frame = scene.coordinateSpace.bounds
         window.rootViewController = controller
@@ -66,7 +76,7 @@ final class AppPresentationTests: XCTestCase {
           rendered = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
         }
         XCTAssertTrue(rendered, "Failed to render \(name)")
-        let filename = "\(name)-\(dark ? "dark" : "light").png"
+        let filename = "\(device)-\(name)-\(dark ? "dark" : "light").png"
         let data = try XCTUnwrap(image.pngData())
         try data.write(to: output.appendingPathComponent(filename))
         let attachment = XCTAttachment(image: image)
@@ -77,4 +87,13 @@ final class AppPresentationTests: XCTestCase {
       }
     }
   }
+
+  @MainActor
+  func testAdaptiveCardLayoutUsesAvailableWidth() async {
+    XCTAssertEqual(AdaptiveCardLayout.columnCount(for: 1024), 2)
+    XCTAssertEqual(AdaptiveCardLayout.columnCount(for: 820), 2)
+    XCTAssertEqual(AdaptiveCardLayout.columnCount(for: 600), 1)
+    XCTAssertEqual(AdaptiveCardLayout.columnCount(for: 393), 1)
+  }
+
 }

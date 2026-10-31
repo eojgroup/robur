@@ -30,7 +30,7 @@ concurrency:
 jobs:
   build:
     name: Compile iPhone, iPad, and Watch
-    timeout-minutes: 25
+    timeout-minutes: 35
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
@@ -112,6 +112,46 @@ jobs:
             cp -R "$app_data/tmp/robur-previews" "$RUNNER_TEMP/robur-previews"
           fi
 
+      - name: Verify iPad layout in the universal app
+        timeout-minutes: 12
+        working-directory: apps/mobile/ios
+        shell: bash
+        run: |
+          set -euo pipefail
+          simulator_id="$(xcrun simctl list devices available -j | ruby -rjson -e '
+            devices = JSON.parse(STDIN.read).fetch("devices").values.flatten
+            simulator = devices.find { |device| device["isAvailable"] && device["name"].start_with?("iPad") }
+            abort("No available iPad simulator found") unless simulator
+            print simulator.fetch("udid")
+          ')"
+          echo "$simulator_id" > "$RUNNER_TEMP/robur-ipad-simulator-id"
+          xcrun simctl shutdown all
+          xcrun simctl boot "$simulator_id"
+          xcrun simctl bootstatus "$simulator_id" -b
+          xcodebuild \
+            -project Robur.xcodeproj \
+            -scheme Robur \
+            -configuration Debug \
+            -destination "id=${simulator_id}" \
+            -parallel-testing-enabled NO \
+            -resultBundlePath "$RUNNER_TEMP/RoburIPadTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:RoburTests/AppPresentationTests \
+            test 2>&1 | tee "$RUNNER_TEMP/robur-ipad-tests.log"
+
+      - name: Collect iPad previews
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f "$RUNNER_TEMP/robur-ipad-simulator-id" ]]; then
+            simulator_id="$(cat "$RUNNER_TEMP/robur-ipad-simulator-id")"
+            app_data="$(xcrun simctl get_app_container "$simulator_id" com.eojgroup.robur data 2>/dev/null || true)"
+            if [[ -n "$app_data" && -d "$app_data/tmp/robur-previews" ]]; then
+              mkdir -p "$RUNNER_TEMP/robur-previews"
+              cp -R "$app_data/tmp/robur-previews/." "$RUNNER_TEMP/robur-previews/"
+            fi
+          fi
+
       - name: Upload simulator test diagnostics
         if: always()
         uses: actions/upload-artifact@v7
@@ -120,6 +160,8 @@ jobs:
           path: |
             ${{ runner.temp }}/robur-tests.log
             ${{ runner.temp }}/RoburTests.xcresult
+            ${{ runner.temp }}/RoburIPadTests.xcresult
+            ${{ runner.temp }}/robur-ipad-tests.log
             ${{ runner.temp }}/robur-previews
           if-no-files-found: warn
           retention-days: 14

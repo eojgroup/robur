@@ -171,3 +171,8 @@ reports. Goals and opt-in local reminders are available from the toolbar setting
 Approve newly requested Health categories using **Access**. See
 [the feature guide and device checks](../../../docs/health-insights.md) for scoring,
 coverage rules, profile fields, notifications and workout analysis details.
+
+Version 1.2 keeps the same universal iPhone/iPad App Store product and release
+workflow. It adds adaptive tablet layouts, real iPad simulator presentation
+checks, navy/beige/orange light/dark styling, improved Fitness effort import,
+and typed workout balance. See the version 1.2 section in the feature guide.

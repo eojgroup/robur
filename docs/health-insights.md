@@ -44,3 +44,33 @@ The app refreshes on foreground return when its snapshot is older than 15 minute
    Verify no repeated same-day goal alerts and no personal values on the lock screen.
 7. Check large text, VoiceOver, iPad, light/dark appearance and the new icon on
    iPhone/Watch. The simulator uses explicit synthetic presentation fixtures only.
+
+## Version 1.2: Fitness effort, training balance and iPad
+
+- A navy/beige/orange heart-rate symbol replaces the letter icon. The app follows
+  the same palette, with System, Light and Dark appearance choices in Settings.
+- iPhone and iPad use one universal app, bundle ID, archive and TestFlight build.
+  The tablet layout uses two-column cards where space permits; CI runs the
+  presentation tests on both an iPhone simulator and an iPad simulator.
+- Effort import reads workout and activity relationships. Recorded Fitness
+  ratings take priority over Apple estimates; activity-level ratings are
+  duration-weighted when an overall workout rating is absent. Opening a workout
+  retries associated samples and access/import problems are displayed explicitly.
+  Empty results do not prove that read access was denied. Newly requested Health
+  categories are detected separately from the old authorization-requested flag.
+- The training-load comparison uses imported Apple effort and session duration,
+  shows short/long rolling averages and history coverage, and labels Robur's
+  own arithmetic calculation. It does not claim to reproduce Apple's proprietary
+  weighted Training Load score. Manual/HR estimates stay distinct.
+- Workout activity types are preserved, including running, cycling, tennis and
+  functional/traditional strength. Training balance compares recorded minutes
+  and sessions with category/sport targets the user chooses. Missing recorded
+  activity is not a claim that an exercise is medically necessary or that a
+  particular muscle was not trained.
+
+Device checks: compare a Fitness rating and an Apple estimate with the imported
+source labels; test multi-activity workouts and a subsequently edited rating;
+review new Health access, refresh and inspect error/empty diagnostics. On an
+actual iPad, install the same TestFlight product and test portrait, landscape,
+Split View, light/dark mode and large text. Configure training targets and verify
+zero-session gaps against the original workout activity types in Fitness.

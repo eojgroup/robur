@@ -81,7 +81,7 @@ struct WatchScoreRow: View {
           .font(.headline)
       }
       ProgressView(value: Double(value), total: 100)
-        .tint(.green)
+        .tint(Color(red: 0.95, green: 0.53, blue: 0.22))
     }
   }
 }

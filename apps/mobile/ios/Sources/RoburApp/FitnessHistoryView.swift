@@ -12,7 +12,7 @@ struct FitnessHistoryView: View {
 
   private var monthly: Bool { healthKit.historyRange == .all || healthKit.historyRange == .year }
   private var buckets: [HistoryBucket] {
-    WorkoutAnalytics.buckets(workouts: healthKit.workouts, annotations: journal.annotations, monthly: monthly)
+    WorkoutAnalytics.buckets(workouts: healthKit.workouts, annotations: [:], monthly: monthly)
   }
   private var points: [TrendPoint] {
     WorkoutAnalytics.trend(readings: healthKit.fitnessReadings, metric: metric, monthly: monthly)
@@ -48,8 +48,10 @@ struct FitnessHistoryView: View {
             Text("Available records from \(earliest.formatted(date: .abbreviated, time: .omitted))")
               .font(.caption).foregroundStyle(.secondary)
           }
-          trainingCard
-          fitnessCard
+          AdaptiveCardLayout {
+            trainingCard
+            fitnessCard
+          }
           if let period = selectedPeriod {
             VStack(alignment: .leading, spacing: 12) {
               Text("\(monthly ? "Month" : "Week") of \(period.start.formatted(date: .abbreviated, time: .omitted))").font(.headline)
@@ -64,7 +66,7 @@ struct FitnessHistoryView: View {
           Text("Select a date on either chart to explore the same period. Charts use \(monthly ? "monthly" : "weekly") averages and totals. Trends show associations, not proof that a particular workout caused a change. All history means every record Apple Health permits Robur to read.")
             .font(.footnote).foregroundStyle(.secondary)
           HistoryPermissionView()
-        }.padding()
+        }.frame(maxWidth: RoburStyle.contentWidth).padding().frame(maxWidth: .infinity)
       }
       .background(RoburStyle.background)
       .navigationTitle("Progress").navigationBarTitleDisplayMode(.inline)
@@ -94,11 +96,11 @@ struct FitnessHistoryView: View {
       Label("Training rhythm", systemImage: "chart.bar.fill").font(.headline)
       Picker("Measure", selection: $showLoad) {
         Text("Minutes").tag(false)
-        Text("Effort load").tag(true)
+        Text("Apple effort").tag(true)
       }.pickerStyle(.segmented)
       let visible = showLoad ? buckets.filter { $0.ratedWorkouts > 0 } : buckets
       if visible.isEmpty {
-        Text(showLoad ? "Share Apple Fitness workout effort to see session load over time. A manual rating remains available when no Apple effort was recorded." : "Share workouts or choose a wider history to see your training volume.")
+        Text(showLoad ? "Share Apple Fitness workout effort to see effort load over time. Robur personal ratings are excluded from this graph." : "Share workouts or choose a wider history to see your training volume.")
           .foregroundStyle(.secondary).frame(minHeight: 140)
       } else {
         Chart(visible) { bucket in
@@ -116,7 +118,7 @@ struct FitnessHistoryView: View {
         .frame(height: 200)
       }
       Text(showLoad
-        ? "\(buckets.reduce(0) { $0 + $1.ratedWorkouts }) of \(healthKit.workouts.count) workouts with effort. Load = duration × Apple Fitness effort, with an optional manual fallback. Workouts without either are excluded."
+        ? "\(buckets.reduce(0) { $0 + $1.ratedWorkouts }) of \(healthKit.workouts.count) workouts with imported Apple effort. Load = duration × reported Fitness rating or Apple estimate. Personal ratings and Robur HR estimates are excluded."
         : "\(healthKit.workouts.count) workouts · \(Int(healthKit.workouts.reduce(0) { $0 + $1.minutes })) total minutes")
         .font(.caption).foregroundStyle(.secondary)
     }.roburCard()

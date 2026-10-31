@@ -55,7 +55,9 @@ struct RoburTodayView: View {
           .font(.footnote)
           .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: RoburStyle.contentWidth)
         .padding()
+        .frame(maxWidth: .infinity)
       }
       .refreshable { await healthKit.refreshTodaySnapshot() }
       .background(RoburStyle.background)
@@ -93,14 +95,14 @@ struct RoburTodayView: View {
   private var header: some View {
     VStack(alignment: .leading, spacing: 12) {
       Text(Date().formatted(.dateTime.weekday(.wide).month(.abbreviated).day()).uppercased())
-        .font(.caption.weight(.semibold)).tracking(2).foregroundStyle(.white.opacity(0.8))
+        .font(.caption.weight(.semibold)).tracking(2).foregroundStyle(RoburStyle.beige.opacity(0.85))
       Text("Stronger,\none session at a time.")
         .font(.system(.largeTitle, design: .rounded, weight: .bold)).fixedSize(horizontal: false, vertical: true)
       Label("Train with intention. Recover with confidence.", systemImage: "leaf")
-        .font(.subheadline).foregroundStyle(.white.opacity(0.85))
+        .font(.subheadline).foregroundStyle(RoburStyle.beige.opacity(0.9))
     }
-    .padding(24).frame(maxWidth: .infinity, alignment: .leading).foregroundStyle(.white)
-    .background(LinearGradient(colors: [Color(red: 0.08, green: 0.18, blue: 0.29), Color(red: 0.05, green: 0.35, blue: 0.38)],
+    .padding(28).frame(maxWidth: .infinity, alignment: .leading).foregroundStyle(RoburStyle.beige)
+    .background(LinearGradient(colors: [RoburStyle.navy, Color(red: 0.18, green: 0.15, blue: 0.15)],
                                startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 28))
   }
 

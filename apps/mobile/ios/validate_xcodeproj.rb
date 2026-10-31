@@ -54,6 +54,10 @@ project = Xcodeproj::Project.open(project_path)
   abort "Missing target #{name}" unless target
   target.build_configurations.each do |config|
     abort "Wrong bundle ID on #{name}" unless config.build_settings["PRODUCT_BUNDLE_IDENTIFIER"] == identifier
+    if name == "Robur"
+      families = config.build_settings["TARGETED_DEVICE_FAMILY"].to_s.split(",").map(&:strip)
+      abort "Universal iPhone/iPad device families must remain enabled" unless families.sort == %w[1 2]
+    end
   end
   resources = target.resources_build_phase.files_references.map { |file| File.basename(file.path.to_s) }
   abort "Privacy manifest is not bundled in #{name}" unless resources.include?("PrivacyInfo.xcprivacy")
