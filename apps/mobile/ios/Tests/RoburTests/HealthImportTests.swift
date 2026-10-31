@@ -103,4 +103,35 @@ final class HealthImportTests: XCTestCase {
     XCTAssertEqual(HealthKitClient.workoutActivity(.traditionalStrengthTraining), .traditionalStrength)
   }
 
+  func testConflictingSameTimeRatingsAreNotOrderedByArbitraryUUID() {
+    let now = Date()
+    let candidates = [
+      WorkoutEffortCandidate(score: 8, source: .reported, date: now, activityID: "activity", sampleID: "A"),
+      WorkoutEffortCandidate(score: 3, source: .reported, date: now, activityID: "activity", sampleID: "Z")
+    ]
+    XCTAssertTrue(HealthImportMath.hasAmbiguousEffort(candidates))
+    XCTAssertNil(HealthImportMath.effort(candidates))
+    XCTAssertNil(HealthImportMath.effort(Array(candidates.reversed())))
+    XCTAssertFalse(HealthImportMath.hasAmbiguousEffort([candidates[0], candidates[0]]))
+  }
+
+  func testRelatedFallbackCannotReplaceApplesAuthoritativeReportedRating() {
+    let authoritative = WorkoutEffortSelection(score: 8, source: .reported)
+    let history = [WorkoutEffortCandidate(score: 3, source: .reported, date: Date(), sampleID: "older-edit")]
+    XCTAssertEqual(HealthImportMath.fallbackEffort(cached: authoritative, candidates: history), authoritative)
+    XCTAssertEqual(HealthImportMath.fallbackEffort(cached: WorkoutEffortSelection(score: 4, source: .estimated), candidates: history)?.score, 3)
+  }
+
+  func testRelationshipSnapshotCompletesOnlyOnceAcrossConcurrentCallbacks() async {
+    let completion = HealthQueryCompletionGate()
+    let accepted = await withTaskGroup(of: Bool.self, returning: Int.self) { group in
+      for _ in 0..<100 { group.addTask { completion.claim() } }
+      var count = 0
+      for await claimed in group { if claimed { count += 1 } }
+      return count
+    }
+    XCTAssertEqual(accepted, 1)
+    XCTAssertFalse(completion.claim())
+  }
+
 }

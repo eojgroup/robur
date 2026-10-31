@@ -188,13 +188,27 @@ enum GymMonitoringPlan {
   }
 }
 
+// HealthKit relationship queries can deliver later updates; their async snapshot
+// adapter must complete exactly once, even if callbacks race with cancellation.
+final class HealthQueryCompletionGate: @unchecked Sendable {
+  private let lock = NSLock()
+  private var completed = false
+  func claim() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !completed else { return false }
+    completed = true
+    return true
+  }
+}
+
 // Shared by the Health importer and boundary tests; calendar days may be 23/25 hours.
 enum HealthImportMath {
   /// A user rating wins over any estimate, even a newer estimate. A whole-workout
   /// rating wins within that source; otherwise average latest ratings per activity.
   static func effort(_ candidates: [WorkoutEffortCandidate]) -> WorkoutEffortSelection? {
     let valid = candidates.filter { $0.score.isFinite && (1...10).contains($0.score) }
-    guard !valid.isEmpty else { return nil }
+    guard !valid.isEmpty, !hasAmbiguousEffort(valid) else { return nil }
     let source: WorkoutEffortSource = valid.contains { $0.source == .reported } ? .reported : .estimated
     let preferred = valid.filter { $0.source == source }.sorted {
       if $0.date != $1.date { return $0.date > $1.date }
@@ -215,6 +229,25 @@ enum HealthImportMath {
     guard total > 0 else { return nil }
     let value = zip(samples, weights).reduce(0.0) { $0 + $1.0.score * $1.1 } / total
     return WorkoutEffortSelection(score: value, source: source)
+  }
+
+  /// endDate is measurement time, not edit time. Conflicting values from the
+  /// same scope/time cannot be ordered by UUID as a proxy for a current rating.
+  static func hasAmbiguousEffort(_ candidates: [WorkoutEffortCandidate]) -> Bool {
+    let valid = candidates.filter { $0.score.isFinite && (1...10).contains($0.score) }
+    let source: WorkoutEffortSource = valid.contains { $0.source == .reported } ? .reported : .estimated
+    let preferred = valid.filter { $0.source == source }
+    let whole = preferred.filter { $0.activityID == nil }
+    let groups = whole.isEmpty ? Array(Dictionary(grouping: preferred, by: { $0.activityID }).values) : [whole]
+    return groups.contains { samples in
+      guard let latestDate = samples.map(\.date).max() else { return false }
+      return Set(samples.filter { $0.date == latestDate }.map(\.score)).count > 1
+    }
+  }
+
+  static func fallbackEffort(cached: WorkoutEffortSelection?, candidates: [WorkoutEffortCandidate]) -> WorkoutEffortSelection? {
+    if cached?.source == .reported { return cached }
+    return effort(candidates)
   }
 
   static func sleepMinutes(intervals: [DateInterval], calendar: Calendar, wakingDay: Bool = false) -> [Date: Double] {

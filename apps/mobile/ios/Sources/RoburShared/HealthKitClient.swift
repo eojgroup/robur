@@ -477,12 +477,18 @@ extension HealthKitClient {
       return EffortImportResult(error: "Apple Fitness effort requires iOS 18 or later.")
     }
     do {
+      let healthStore = store
       let relationships: [HKWorkoutEffortRelationship] = try await withCheckedThrowingContinuation { continuation in
-        let query = HKWorkoutEffortRelationshipQuery(predicate: nil, anchor: nil, options: .default) { _, relationships, _, error in
+        let completion = HealthQueryCompletionGate()
+        let query = HKWorkoutEffortRelationshipQuery(predicate: nil, anchor: nil, options: .mostRelevant) { query, relationships, _, error in
+          guard completion.claim() else { return }
+          // This is a long-running query. Stop before resuming the snapshot so a
+          // later Health edit cannot resume the checked continuation a second time.
+          healthStore.stop(query)
           if let error { continuation.resume(throwing: error) }
           else { continuation.resume(returning: relationships ?? []) }
         }
-        store.execute(query)
+        healthStore.execute(query)
       }
       var result = EffortImportResult()
       for relationship in relationships {
@@ -491,6 +497,9 @@ extension HealthKitClient {
         result.candidates[id, default: []].append(contentsOf: values)
       }
       result.values = result.candidates.compactMapValues { HealthImportMath.effort($0) }
+      if result.candidates.values.contains(where: { HealthImportMath.hasAmbiguousEffort($0) }) {
+        result.error = "Some Health effort ratings conflict at the same measurement time. Those scores were left unavailable rather than guessing which rating is current."
+      }
       return result
     } catch {
       return EffortImportResult(error: "Effort relationships could not be read: \(error.localizedDescription). Review Health access or open a workout to retry its effort.")
@@ -516,7 +525,12 @@ extension HealthKitClient {
   private func refreshRelatedEffort(for workout: HKWorkout) async {
     guard #available(iOS 18.0, *) else { return }
     let id = workout.uuid.uuidString
-    var candidates = effortCandidates[id] ?? []
+    let cachedCandidates = effortCandidates[id] ?? []
+    let cached = HealthImportMath.effort(cachedCandidates)
+    // Apple's mostRelevant relationship result is authoritative. A broad sample
+    // fallback must not reintroduce older ratings with the same workout endDate.
+    guard cached?.source != .reported else { updateEffortStatus(); return }
+    var candidates = cachedCandidates
     var failures = 0
     // Association predicates, not timestamps, recover scores missing from the
     // relationship query. Activity scores can live on any constituent activity.
@@ -532,8 +546,13 @@ extension HealthKitClient {
       }
     }
     candidates = Array(Set(candidates))
+    if HealthImportMath.hasAmbiguousEffort(candidates) {
+      effortImportError = "Conflicting associated effort ratings have the same measurement time. Refresh Health data to request Fitness's current rating; Robur has not guessed which edit is latest."
+      updateEffortStatus()
+      return
+    }
     effortCandidates[id] = candidates
-    if let selection = HealthImportMath.effort(candidates) {
+    if let selection = HealthImportMath.fallbackEffort(cached: cached, candidates: candidates) {
       if let index = workouts.firstIndex(where: { $0.id == id }) {
         workouts[index].appleEffort = selection.score
         workouts[index].effortSource = selection.source
@@ -706,11 +725,15 @@ extension HealthKitClient {
   private func dailyQuantities(spec: DailyQuantitySpec, start: Date, end: Date) async throws -> [Date: Double] {
     guard let type = HKQuantityType.quantityType(forIdentifier: spec.identifier) else { return [:] }
     let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+    let healthStore = store
     return try await withCheckedThrowingContinuation { continuation in
+      let completion = HealthQueryCompletionGate()
       let query = HKStatisticsCollectionQuery(quantityType: type, quantitySamplePredicate: predicate,
         options: spec.cumulative ? .cumulativeSum : .discreteAverage,
         anchorDate: Calendar.current.startOfDay(for: end), intervalComponents: DateComponents(day: 1))
-      query.initialResultsHandler = { _, collection, error in
+      query.initialResultsHandler = { query, collection, error in
+        guard completion.claim() else { return }
+        healthStore.stop(query)
         if let error { continuation.resume(throwing: error); return }
         var result: [Date: Double] = [:]
         collection?.enumerateStatistics(from: start, to: end) { statistics, _ in
@@ -722,7 +745,7 @@ extension HealthKitClient {
         }
         continuation.resume(returning: result)
       }
-      store.execute(query)
+      healthStore.execute(query)
     }
   }
 
