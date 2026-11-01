@@ -273,3 +273,37 @@ Device checks: Calendar/Reminders offline or slow while editing/creating/moving 
 linked plan; cancel/retry a sync and relaunch pending edits; delete or move an event
 in Calendar; all-history missing and partial Health permissions; widgets while
 locked/unlocked and after Health permission changes; small/large iPad split windows.
+
+## Calendar planning and coverage 1.5
+
+Plan shows a navigable week, daily session timing, training-category coverage and
+muscle focus. Suggestions, confirmed sessions and completed plans remain distinct;
+marking a plan complete never creates an Apple Health workout. Strength editors
+show muscle chips and full/upper/lower-body presets before saving. Strength focus
+also appears in linked Calendar and Reminders titles.
+
+Calendar gaps mode searches 07:00–21:00 using fresh busy events from all readable
+calendars, including read-only calendars. Custom hours remain available. The local
+rule favors morning, lunch and evening gaps with ten minutes for transitions,
+balances selected training categories and rotates strength focus using recorded
+muscle labels and upcoming plans. Suggestions are editable and only become Calendar
+events after an explicit Add action. Without Calendar permission, suggestions cannot
+account for external events.
+
+Remove `[Suggested]` from a linked Calendar or Reminders title to confirm. On
+calendars supporting tentative availability, changing Tentative to Busy also
+confirms. Calendar has no workout-completion checkbox: prefix its title with
+`[Completed]`, follow the Robur link, or check the linked reminder. Reminders
+completion sync is automatic when Reminders sync is enabled. External schedule and
+state changes are reconciled while Robur is open and on return to the app; this is
+not a background calendar service. Ownership markers protect unrelated items, and
+deleted external items are not silently recreated.
+
+Real-device acceptance: add a strength session and verify its muscle title; confirm
+a suggestion independently in Calendar and Reminders; complete in either app and
+verify Robur plus the other linked item; move the event and then the reminder and
+check both directions; repeat after an offline edit, force-quit/relaunch, and a
+sync cancellation. Generate around a read-only work calendar with morning/lunch
+gaps and an all-day busy event. Verify week navigation, large text, light/dark mode
+and narrow iPad windows. Automated fixtures cover state transitions, old archives,
+conflicts, buffers, DST and muscle/category rotation; account sync needs a device.

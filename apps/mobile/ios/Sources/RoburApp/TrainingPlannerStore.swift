@@ -17,7 +17,7 @@ final class TrainingPlannerStore: ObservableObject {
   @Published private(set) var selectedCalendarID: String?
   @Published private(set) var selectedReminderListID: String?
   @Published private(set) var remindersEnabled = false
-  @Published private(set) var syncReminderCompletion = false
+  @Published private(set) var syncReminderCompletion = true
   @Published private(set) var calendarAccess = false
   @Published private(set) var reminderAccess = false
   // This describes external sync only. Local editing never takes this lock.
@@ -44,7 +44,7 @@ final class TrainingPlannerStore: ObservableObject {
     var calendarID: String?
     var reminderListID: String?
     var remindersEnabled = false
-    var syncReminderCompletion = false
+    var syncReminderCompletion = true
   }
   private var archive: Archive {
     Archive(entries: entries, calendarID: selectedCalendarID, reminderListID: selectedReminderListID,
@@ -107,17 +107,13 @@ final class TrainingPlannerStore: ObservableObject {
     if commit(next) { scheduleSync() }
   }
 
-  func setReminderCompletion(_ enabled: Bool) {
-    var next = archive; next.syncReminderCompletion = enabled
-    if commit(next) { scheduleSync() }
-  }
-
   @discardableResult
   func create(activity: WorkoutActivity, startDate: Date, durationMinutes: Int,
               muscles: Set<MuscleGroup> = [], state: PlanEntryState = .confirmed) -> UUID? {
     var entry = PlanEntry(activity: activity, startDate: startDate, durationMinutes: durationMinutes, muscles: muscles, state: state)
     entry.isManualSession = true
-    entry.reminderSyncPending = remindersEnabled && state != .suggested ? true : nil
+    entry.localModificationDate = Date()
+    entry.reminderSyncPending = remindersEnabled ? true : nil
     guard entry.isValid else { lastError = "Choose a duration between 1 minute and 24 hours."; return nil }
     var next = archive; next.entries.append(entry)
     guard commit(next) else { return nil }
@@ -129,11 +125,14 @@ final class TrainingPlannerStore: ObservableObject {
   @discardableResult
   func duplicate(id: UUID, startDate: Date) -> UUID? {
     guard let original = entries.first(where: { $0.id == id }) else { return nil }
-    let copy = original.duplicated(startDate: startDate)
+    var copy = original.duplicated(startDate: startDate)
+    copy.localModificationDate = Date()
+    copy.reminderSyncPending = remindersEnabled ? true : nil
     guard copy.isValid else { return nil }
     var next = archive; next.entries.append(copy)
     guard commit(next) else { return nil }
     status = "Session duplicated in your local plan. Review it before adding it to Calendar."
+    scheduleSync()
     return copy.id
   }
 
@@ -145,17 +144,39 @@ final class TrainingPlannerStore: ObservableObject {
   }
 
   func generateWeek(workouts: [WorkoutRecord], categories: Set<TrainingCategory>,
-                    preferredActivities: Set<WorkoutActivity> = [], startHour: Int = 17, endHour: Int = 20,
-                    now: Date = Date(), calendar: Calendar = .current) {
+                    annotations: [String: WorkoutAnnotation] = [:],
+                    preferredActivities: Set<WorkoutActivity> = [], startHour: Int = 7, endHour: Int = 21,
+                    now: Date = Date(), calendar: Calendar = .current) async {
+    // Suggestions must use today's readable calendars, not a previous screen visit's
+    // cache. Failed or cancelled fetches leave the existing plan untouched.
+    if !externalAccessDisabled && EKEventStore.authorizationStatus(for: .event) == .fullAccess {
+      guard !isWorking else { status = "Calendar sync is running. Generate again when it finishes."; return }
+      var receivedAvailability = false
+      await performExternal {
+        do {
+          self.cachedBusy = try await self.worker.availability(now: now, calendar: calendar)
+          self.calendarAccess = true
+          receivedAvailability = true
+        } catch { self.externalError(error) }
+      }
+      guard receivedAvailability else { return }
+    } else { cachedBusy = []; calendarAccess = false }
     var next = archive
     next.entries.removeAll { $0.state == .suggested && !$0.calendarWasExported &&
-      $0.isManualSession != true && !exportingIDs.contains($0.id) }
-    let generated = TrainingPlanner.suggest(workouts: workouts, existing: next.entries, categories: categories,
-      preferredActivities: preferredActivities, busy: cachedBusy, now: now, startHour: startHour, endHour: endHour, calendar: calendar)
-    next.entries.append(contentsOf: generated)
+      !$0.reminderWasCreated && $0.isManualSession != true && !exportingIDs.contains($0.id) }
+    let generated = TrainingPlanner.suggest(workouts: workouts, existing: next.entries, annotations: annotations,
+      categories: categories, preferredActivities: preferredActivities, busy: cachedBusy, now: now, startHour: startHour, endHour: endHour, calendar: calendar)
+    next.entries.append(contentsOf: generated.map { suggestion in
+      var entry = suggestion
+      entry.localModificationDate = Date()
+      entry.reminderSyncPending = remindersEnabled ? true : nil
+      return entry
+    })
     if commit(next) {
       status = generated.isEmpty ? "No new slots fit. Try a wider time window or review retained plans." :
-        "\(generated.count) editable suggestions saved locally. Calendar conflicts are checked when adding sessions."
+        (calendarAccess ? "\(generated.count) suggestions fitted around your Calendar. Review before adding sessions." :
+          "\(generated.count) local suggestions. Connect Calendar to fit them around your existing events.")
+      scheduleSync()
     }
   }
 
@@ -174,6 +195,7 @@ final class TrainingPlannerStore: ObservableObject {
     if let activity { next.entries[index].activity = activity }
     if let muscles { next.entries[index].muscles = muscles }
     if let state { next.entries[index].state = state }
+    next.entries[index].localModificationDate = Date()
     guard next.entries[index].isValid else { lastError = "Choose a duration between 1 minute and 24 hours."; return false }
     // Save first, even when access has been revoked or an external request is stalled.
     if next.entries[index].calendarEventID != nil {
@@ -182,7 +204,7 @@ final class TrainingPlannerStore: ObservableObject {
       }
       next.entries[index].calendarSyncPending = true
     }
-    if next.remindersEnabled && (next.entries[index].state != .suggested || next.entries[index].reminderWasCreated) {
+    if next.remindersEnabled {
       next.entries[index].reminderSyncPending = true
     } else if !next.entries[index].reminderWasCreated {
       next.entries[index].reminderSyncPending = nil
@@ -224,8 +246,7 @@ final class TrainingPlannerStore: ObservableObject {
   func setRemindersEnabled(_ enabled: Bool) async {
     var next = archive; next.remindersEnabled = enabled
     for index in next.entries.indices {
-      next.entries[index].reminderSyncPending = enabled &&
-        (next.entries[index].state != .suggested || next.entries[index].reminderWasCreated) ? true : nil
+      next.entries[index].reminderSyncPending = enabled ? true : nil
     }
     guard commit(next), enabled, !externalAccessDisabled else { return }
     if !reminderAccess {
@@ -243,7 +264,9 @@ final class TrainingPlannerStore: ObservableObject {
   /// Only an explicit add action may create a Calendar event.
   func exportPlaceholders(ids: Set<UUID>? = nil, allowReExport: Bool = false) async {
     guard !externalAccessDisabled else { lastError = "Connect Calendar with full access to add a placeholder."; return }
+    guard !isWorking else { status = "Calendar sync is running. Add this session again when it finishes."; return }
     if let ids, ids.isEmpty { return }
+    guard !isWorking else { lastError = "Calendar sync is running. Add the session again when it finishes."; return }
     guard commit(archive) else { return }
     await performExternal {
       let baseline = self.entries
@@ -288,18 +311,19 @@ final class TrainingPlannerStore: ObservableObject {
 
   func reconcile() async {
     guard !externalAccessDisabled else { return }
+    guard !isWorking else { needsAnotherSync = true; return }
     await performExternal {
       let baseline = self.entries
       let settings = self.settings
       do {
-        let snapshot = try await self.worker.refresh(entries: baseline)
+        let snapshot = try await self.worker.refresh(entries: baseline, settings: settings)
         self.calendarAccess = snapshot.calendarAccess
         self.reminderAccess = snapshot.reminderAccess
         self.calendars = snapshot.calendars
         self.reminderLists = snapshot.reminderLists
         self.cachedBusy = snapshot.busy
-        if self.selectedCalendarID == nil { self.chooseCalendar(snapshot.defaultCalendarID) }
-        if self.selectedReminderListID == nil {
+        if !snapshot.calendars.contains(where: { $0.id == self.selectedCalendarID }) { self.chooseCalendar(snapshot.defaultCalendarID) }
+        if !snapshot.reminderLists.contains(where: { $0.id == self.selectedReminderListID }) {
           var next = self.archive; next.reminderListID = snapshot.defaultReminderListID; _ = self.commit(next)
         }
         self.merge(snapshot.entries, baseline: baseline)
@@ -308,7 +332,21 @@ final class TrainingPlannerStore: ObservableObject {
           let synced = try await self.worker.syncReminders(entries: reminderBaseline, settings: self.settings)
           self.merge(synced, baseline: reminderBaseline)
         }
-        if self.pendingSyncCount == 0 { self.status = "Local plan saved. Calendar and Reminders are up to date where connected." }
+        // A Reminder checkbox or due-date edit must update its linked Calendar in
+        // this pass, rather than waiting for another foreground/notification.
+        if snapshot.calendarAccess && self.entries.contains(where: { $0.calendarSyncPending == true }) {
+          let calendarBaseline = self.entries
+          let synced = try await self.worker.syncCalendarChanges(entries: calendarBaseline)
+          self.merge(synced, baseline: calendarBaseline)
+          if synced.contains(where: { entry in entry.reminderSyncPending == true &&
+            calendarBaseline.first(where: { $0.id == entry.id })?.reminderSyncPending != true }) {
+            self.needsAnotherSync = true
+          }
+        }
+        if self.pendingSyncCount == 0 {
+          self.lastError = nil
+          self.status = "Local plan saved. Calendar and Reminders are up to date where connected."
+        }
       } catch { self.externalError(error) }
     }
   }
@@ -320,9 +358,9 @@ final class TrainingPlannerStore: ObservableObject {
   }
 
   private func eventStoreChanged() {
-    // Our own writes also emit this notification. Ignore them during sync and
-    // coalesce later notifications; reconciliation only writes actual changes.
-    guard !isWorking else { return }
+    // Our own writes also emit this notification. Coalesce changes arriving
+    // during sync into one later pass; reconciliation only writes actual changes.
+    guard !isWorking else { needsAnotherSync = true; return }
     notificationTask?.cancel()
     notificationTask = Task { [weak self] in
       do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
@@ -377,6 +415,15 @@ final class TrainingPlannerStore: ObservableObject {
           next.entries[index].calendarUsesTentativeAvailability = result.calendarUsesTentativeAvailability
           next.entries[index].calendarSyncPending = result.calendarEventID != nil ? true : nil
         }
+        if next.entries[index].calendarLastModifiedDate == old.calendarLastModifiedDate {
+          next.entries[index].calendarLastModifiedDate = result.calendarLastModifiedDate
+          next.entries[index].calendarLastSyncedTitle = result.calendarLastSyncedTitle
+        }
+        if next.entries[index].reminderLastModifiedDate == old.reminderLastModifiedDate {
+          next.entries[index].reminderLastModifiedDate = result.reminderLastModifiedDate
+          next.entries[index].reminderLastSyncedTitle = result.reminderLastSyncedTitle
+          next.entries[index].reminderLastSyncedCompleted = result.reminderLastSyncedCompleted
+        }
         if next.entries[index].calendarExternalID == old.calendarExternalID {
           next.entries[index].calendarExternalID = result.calendarExternalID
         }
@@ -398,7 +445,9 @@ final class TrainingPlannerStore: ObservableObject {
     selectedCalendarID = saved.calendarID
     selectedReminderListID = saved.reminderListID
     remindersEnabled = saved.remindersEnabled
-    syncReminderCompletion = saved.syncReminderCompletion
+    // Older releases silently ignored checked reminders unless this switch was
+    // enabled. Connected Reminders now always share completion with Robur.
+    syncReminderCompletion = true
   }
 
   @discardableResult private func commit(_ next: Archive) -> Bool {
@@ -464,7 +513,15 @@ private final class TrainingPlanEventWorker: @unchecked Sendable {
     }
   }
 
-  func refresh(entries: [PlanEntry]) async throws -> Snapshot {
+  func availability(now: Date, calendar: Calendar) async throws -> [DateInterval] {
+    try await perform { store, operation in
+      guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { throw PlannerError.calendarAccess }
+      let end = calendar.date(byAdding: .day, value: 7, to: now) ?? now
+      return try self.busyIntervals(from: now, to: end, store: store, operation: operation)
+    }
+  }
+
+  func refresh(entries: [PlanEntry], settings: Settings) async throws -> Snapshot {
     try await perform { store, operation in
       let calendarAccess = EKEventStore.authorizationStatus(for: .event) == .fullAccess
       let reminderAccess = EKEventStore.authorizationStatus(for: .reminder) == .fullAccess
@@ -474,26 +531,46 @@ private final class TrainingPlanEventWorker: @unchecked Sendable {
       if calendarAccess {
         for index in next.indices where next[index].calendarEventID != nil || next[index].calendarSyncPending == true {
           try operation.check()
-          if let event = try self.findEvent(for: next[index], store: store, operation: operation) {
-            if next[index].calendarSyncPending == true { try self.update(event: event, entry: next[index], store: store, operation: operation) }
-            else { next[index].reconcile(start: event.startDate, end: event.endDate, title: event.title ?? "", isBusy: event.availability == .busy) }
-            next[index].calendarEventID = event.eventIdentifier
-            next[index].calendarExternalID = event.calendarItemExternalIdentifier
-            next[index].calendarLastKnownStartDate = event.startDate
-            next[index].calendarSyncPending = nil
+          var entry = next[index]
+          if let event = try self.findEvent(for: entry, store: store, operation: operation) {
+            let before = entry
+            let calendarContentChanged = event.title != entry.calendarLastSyncedTitle ||
+              event.startDate != entry.calendarLastKnownStartDate ||
+              event.endDate != entry.endDate ||
+              (entry.state == .suggested && entry.calendarUsesTentativeAvailability && event.availability == .busy)
+            let importChange = TrainingPlanExternalSync.shouldImport(modified: event.lastModifiedDate,
+              observed: entry.calendarLastModifiedDate, pending: entry.calendarSyncPending == true,
+              competing: [entry.localModificationDate], contentChanged: calendarContentChanged)
+            if importChange {
+              entry.reconcile(start: event.startDate, end: event.endDate, title: event.title ?? "", isBusy: event.availability == .busy)
+              entry.calendarSyncPending = nil
+              if entry.startDate != before.startDate || entry.durationMinutes != before.durationMinutes || entry.state != before.state {
+                TrainingPlanExternalSync.recordSessionChange(entry: &entry, modified: event.lastModifiedDate)
+                if settings.remindersEnabled { entry.reminderSyncPending = true }
+              }
+            }
+            entry.calendarEventID = event.eventIdentifier
+            entry.calendarExternalID = event.calendarItemExternalIdentifier
+            entry.calendarLastKnownStartDate = event.startDate
+            entry.calendarLastModifiedDate = event.lastModifiedDate
+            entry.calendarLastSyncedTitle = event.title
+            // Upgrade existing default titles and focus summaries after reading both
+            // sources. An early write here would hide an older unchecked Reminder edit.
+            if event.calendar.allowsContentModifications &&
+                (self.desiredTitle(event.title ?? "", entry: entry) != event.title ||
+                self.notes(existing: event.notes, entry: entry) != event.notes) {
+              entry.calendarSyncPending = true
+            }
           } else {
-            next[index].calendarEventID = nil
-            next[index].calendarSyncPending = nil
+            entry.calendarEventID = nil
+            entry.calendarSyncPending = nil
           }
+          next[index] = entry
         }
       }
       let now = Date()
       let end = Calendar.current.date(byAdding: .day, value: 7, to: now) ?? now
-      let busy = calendarAccess ? try self.events(from: now, to: end, store: store, operation: operation).compactMap { event -> DateInterval? in
-        guard event.availability != .free, event.status != .canceled,
-              let start = event.startDate, let end = event.endDate, end > start else { return nil }
-        return DateInterval(start: start, end: end)
-      } : []
+      let busy = calendarAccess ? try self.busyIntervals(from: now, to: end, store: store, operation: operation) : []
       return Snapshot(entries: next, calendarAccess: calendarAccess, reminderAccess: reminderAccess,
         calendars: calendars.map { .init(calendarIdentifier: $0.calendarIdentifier, title: $0.title) },
         reminderLists: lists.map { .init(calendarIdentifier: $0.calendarIdentifier, title: $0.title) },
@@ -502,11 +579,46 @@ private final class TrainingPlanEventWorker: @unchecked Sendable {
     }
   }
 
+  func syncCalendarChanges(entries: [PlanEntry]) async throws -> [PlanEntry] {
+    try await perform { store, operation in
+      var next = entries
+      for index in next.indices where next[index].calendarSyncPending == true {
+        try operation.check()
+        var entry = next[index]
+        if let event = try self.findEvent(for: entry, store: store, operation: operation) {
+          // Refetching may reveal an edit made after this pass's first snapshot.
+          if TrainingPlanExternalSync.shouldImport(modified: event.lastModifiedDate,
+              observed: entry.calendarLastModifiedDate, pending: true, competing: [entry.localModificationDate]) {
+            let previous = entry
+            entry.reconcile(start: event.startDate, end: event.endDate, title: event.title ?? "", isBusy: event.availability == .busy)
+            entry.calendarSyncPending = nil
+            if entry.startDate != previous.startDate || entry.durationMinutes != previous.durationMinutes || entry.state != previous.state {
+              TrainingPlanExternalSync.recordSessionChange(entry: &entry, modified: event.lastModifiedDate)
+              if entry.reminderWasCreated { entry.reminderSyncPending = true }
+            }
+          }
+          entry.calendarLastModifiedDate = event.lastModifiedDate
+          entry.calendarLastSyncedTitle = event.title
+          guard event.calendar.allowsContentModifications else { next[index] = entry; continue }
+          try self.update(event: event, entry: entry, store: store, operation: operation)
+          entry.calendarEventID = event.eventIdentifier
+          entry.calendarExternalID = event.calendarItemExternalIdentifier
+          entry.calendarLastKnownStartDate = event.startDate
+          entry.calendarLastModifiedDate = event.lastModifiedDate
+          entry.calendarLastSyncedTitle = event.title
+        } else { entry.calendarEventID = nil }
+        entry.calendarSyncPending = nil
+        next[index] = entry
+      }
+      return next
+    }
+  }
+
   func export(entries: [PlanEntry], settings: Settings, ids: Set<UUID>?, allowReExport: Bool,
               progress: @escaping ([PlanEntry]) -> Void) async throws -> ExportResult {
     try await perform { store, operation in
       guard EKEventStore.authorizationStatus(for: .event) == .fullAccess,
-            let calendar = store.calendars(for: .event).first(where: { $0.calendarIdentifier == settings.calendarID && $0.allowsContentModifications }) else {
+            let calendar = store.calendars(for: .event).first(where: { $0.calendarIdentifier == (settings.calendarID ?? store.defaultCalendarForNewEvents?.calendarIdentifier) && $0.allowsContentModifications }) else {
         throw PlannerError.calendarAccess
       }
       var result = ExportResult(entries: entries)
@@ -537,7 +649,7 @@ private final class TrainingPlanEventWorker: @unchecked Sendable {
           event.timeZone = .current
           event.url = entry.url
           entry.calendarUsesTentativeAvailability = calendar.supportedEventAvailabilities.contains(.tentative)
-          event.notes = "Editable Robur training plan. Confirm in Robur or remove [Suggested] in Calendar.\nRobur plan ID: \(entry.id.uuidString)\n\(entry.url.absoluteString)"
+          event.notes = self.notes(existing: nil, entry: entry)
           if entry.state == .suggested && entry.calendarUsesTentativeAvailability { event.availability = .tentative }
           else if calendar.supportedEventAvailabilities.contains(.busy) { event.availability = .busy }
           try operation.check()
@@ -548,6 +660,10 @@ private final class TrainingPlanEventWorker: @unchecked Sendable {
           result.inserted += 1
         }
         entry.calendarLastKnownStartDate = entry.startDate
+        if let id = entry.calendarEventID, let savedEvent = store.event(withIdentifier: id) {
+          entry.calendarLastModifiedDate = savedEvent.lastModifiedDate
+          entry.calendarLastSyncedTitle = savedEvent.title
+        }
         entry.calendarSyncPending = nil
         result.entries[index] = entry
         // Checkpoint links after every external save, including a partial bulk export.
@@ -594,51 +710,79 @@ private final class TrainingPlanEventWorker: @unchecked Sendable {
   private func applyReminders(entries: [PlanEntry], all: [EKReminder], list: EKCalendar, settings: Settings,
                               store: EKEventStore, operation: PlannerOperation<[PlanEntry]>) throws -> [PlanEntry] {
     var next = entries
-    for index in next.indices where next[index].state != .suggested || next[index].reminderWasCreated {
+    for index in next.indices {
       try operation.check()
       var entry = next[index]
       let byID = entry.reminderID.flatMap { store.calendarItem(withIdentifier: $0) as? EKReminder }
       var reminder = byID.flatMap { self.owns($0, entry: entry) ? $0 : nil } ?? all.first { self.owns($0, entry: entry) }
-      if reminder == nil && !entry.reminderWasCreated && entry.state == .confirmed {
+      let isNew = reminder == nil && !entry.reminderWasCreated && entry.state != .completed && entry.endDate > Date()
+      if isNew {
         let created = EKReminder(eventStore: store)
         created.calendar = list
-        created.title = "\(entry.activity.title) — Robur"
+        created.title = entry.reminderTitle
         created.url = entry.url
-        created.notes = "Robur plan ID: \(entry.id.uuidString)"
+        created.notes = self.notes(existing: nil, entry: entry)
         reminder = created
       }
-      guard let reminder, reminder.calendar.allowsContentModifications else {
+      guard let reminder else {
         entry.reminderID = nil
         entry.reminderSyncPending = nil
         next[index] = entry
         continue
       }
-      if settings.syncReminderCompletion && reminder.isCompleted && entry.reminderSyncPending != true { entry.state = .completed }
-      let due = Calendar.current.dateComponents([.calendar, .timeZone, .year, .month, .day, .hour, .minute], from: entry.startDate)
-      let alarmDate = Calendar.current.date(from: due) ?? entry.startDate
-      let previousDue = reminder.dueDateComponents.flatMap { Calendar.current.date(from: $0) }
-      var changed = !entry.reminderWasCreated || reminder.dueDateComponents != due
-      var alarms = reminder.alarms ?? []
-      if !entry.reminderWasCreated && !alarms.contains(where: { $0.absoluteDate == alarmDate }) {
-        alarms.append(EKAlarm(absoluteDate: alarmDate)); changed = true
-      } else if let previousDue, previousDue != alarmDate,
-                let alarmIndex = alarms.firstIndex(where: { $0.absoluteDate == previousDue }) {
-        alarms[alarmIndex] = EKAlarm(absoluteDate: alarmDate); changed = true
-      }
-      if changed { reminder.alarms = alarms; reminder.dueDateComponents = due }
-      if self.isDefaultTitle(reminder.title ?? ""), reminder.title != "\(entry.activity.title) — Robur" {
-        reminder.title = "\(entry.activity.title) — Robur"; changed = true
-      }
-      if settings.syncReminderCompletion {
-        let completed = entry.state == .completed
-        if (entry.reminderSyncPending == true || completed) && reminder.isCompleted != completed {
-          reminder.isCompleted = completed; changed = true
+      let previousDue = reminder.dueDateComponents.flatMap { TrainingPlanExternalSync.reminderDate($0, fallback: entry.startDate) }
+      let previousSessionAlarm = Calendar.current.date(from: Calendar.current.dateComponents(
+        [.calendar, .timeZone, .year, .month, .day, .hour, .minute], from: entry.startDate))
+      let reminderContentChanged = reminder.title != entry.reminderLastSyncedTitle ||
+        reminder.isCompleted != entry.reminderLastSyncedCompleted ||
+        (reminder.dueDateComponents != nil && !TrainingPlanExternalSync.sameReminderDate(reminder.dueDateComponents, sessionStart: entry.startDate))
+      let importChange = !isNew && TrainingPlanExternalSync.shouldImport(modified: reminder.lastModifiedDate,
+        observed: entry.reminderLastModifiedDate, pending: entry.reminderSyncPending == true,
+        competing: [entry.localModificationDate], contentChanged: reminderContentChanged)
+      if importChange {
+        entry.reminderSyncPending = nil
+        if TrainingPlanExternalSync.reconcileReminder(entry: &entry, due: previousDue,
+            title: reminder.title ?? "", isCompleted: reminder.isCompleted) {
+          TrainingPlanExternalSync.recordSessionChange(entry: &entry, modified: reminder.lastModifiedDate)
+          if entry.calendarEventID != nil { entry.calendarSyncPending = true }
         }
       }
+      entry.reminderLastModifiedDate = reminder.lastModifiedDate
+      entry.reminderLastSyncedTitle = reminder.title
+      entry.reminderLastSyncedCompleted = reminder.isCompleted
+      // Import changes from a moved read-only list too, but never write into it.
+      guard reminder.calendar.allowsContentModifications else { next[index] = entry; continue }
+      let due = Calendar.current.dateComponents([.calendar, .timeZone, .year, .month, .day, .hour, .minute], from: entry.startDate)
+      let alarmDate = Calendar.current.date(from: due) ?? entry.startDate
+      // Providers normalize calendar/time-zone metadata. Compare the represented
+      // minute, not DateComponents equality, or our own saves can loop forever.
+      // Preserve date-only/cleared due dates unless a local session edit is pending.
+      let dateChanged = isNew || (reminder.dueDateComponents != nil &&
+        !TrainingPlanExternalSync.sameReminderDate(reminder.dueDateComponents, sessionStart: entry.startDate)) ||
+        (entry.reminderSyncPending == true && reminder.dueDateComponents?.hour == nil)
+      var changed = dateChanged
+      var alarms = reminder.alarms ?? []
+      if isNew && !alarms.contains(where: { $0.absoluteDate == alarmDate }) {
+        alarms.append(EKAlarm(absoluteDate: alarmDate)); reminder.alarms = alarms; changed = true
+      } else if let priorAlarm = importChange ? previousSessionAlarm : previousDue,
+                priorAlarm != alarmDate,
+                let alarmIndex = alarms.firstIndex(where: { $0.absoluteDate == priorAlarm }) {
+        alarms[alarmIndex] = EKAlarm(absoluteDate: alarmDate); reminder.alarms = alarms; changed = true
+      }
+      if dateChanged { reminder.dueDateComponents = due }
+      let title = self.desiredTitle(reminder.title ?? "", entry: entry)
+      if reminder.title != title { reminder.title = title; changed = true }
+      let notes = self.notes(existing: reminder.notes, entry: entry)
+      if reminder.notes != notes { reminder.notes = notes; changed = true }
+      let completed = entry.state == .completed
+      if reminder.isCompleted != completed { reminder.isCompleted = completed; changed = true }
       if changed { try operation.check(); try store.save(reminder, commit: true) }
       entry.reminderID = reminder.calendarItemIdentifier
       entry.reminderWasCreated = true
       entry.reminderSyncPending = nil
+      entry.reminderLastModifiedDate = reminder.lastModifiedDate
+      entry.reminderLastSyncedTitle = reminder.title
+      entry.reminderLastSyncedCompleted = reminder.isCompleted
       next[index] = entry
     }
     return next
@@ -649,10 +793,10 @@ private final class TrainingPlanEventWorker: @unchecked Sendable {
     var changed = false
     if event.startDate != entry.startDate { event.startDate = entry.startDate; changed = true }
     if event.endDate != entry.endDate { event.endDate = entry.endDate; changed = true }
-    let title = (event.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-    let base = title.hasPrefix("[Suggested]") ? String(title.dropFirst("[Suggested]".count)).trimmingCharacters(in: .whitespacesAndNewlines) : title
-    let desired = isDefaultTitle(base) ? entry.calendarTitle : "\(entry.state == .suggested ? "[Suggested] " : "")\(base)"
+    let desired = desiredTitle(event.title ?? "", entry: entry)
     if event.title != desired { event.title = desired; changed = true }
+    let notes = self.notes(existing: event.notes, entry: entry)
+    if event.notes != notes { event.notes = notes; changed = true }
     let availability: EKEventAvailability = entry.state == .suggested && event.calendar.supportedEventAvailabilities.contains(.tentative) ? .tentative : .busy
     if event.calendar.supportedEventAvailabilities.contains(availability == .tentative ? .tentative : .busy), event.availability != availability {
       event.availability = availability; changed = true
@@ -660,7 +804,23 @@ private final class TrainingPlanEventWorker: @unchecked Sendable {
     if changed { try operation.check(); try store.save(event, span: .thisEvent, commit: true) }
   }
 
-  private func isDefaultTitle(_ title: String) -> Bool { WorkoutActivity.allCases.contains { title == "\($0.title) — Robur" } }
+  private func desiredTitle(_ existing: String, entry: PlanEntry) -> String {
+    TrainingPlanExternalSync.title(existing: existing, entry: entry)
+  }
+
+  private func notes(existing: String?, entry: PlanEntry) -> String {
+    TrainingPlanExternalSync.notes(existing: existing, entry: entry)
+  }
+
+  private func busyIntervals<Value>(from start: Date, to end: Date, store: EKEventStore,
+                                   operation: PlannerOperation<Value>) throws -> [DateInterval] {
+    try events(from: start, to: end, store: store, operation: operation).compactMap { event in
+      guard event.availability != .free, event.status != .canceled,
+            let start = event.startDate, let end = event.endDate, end > start else { return nil }
+      return DateInterval(start: start, end: end)
+    }
+  }
+
   private func owns(_ item: EKCalendarItem, entry: PlanEntry) -> Bool {
     item.url == entry.url || (item.notes ?? "").components(separatedBy: .newlines).contains("Robur plan ID: \(entry.id.uuidString)")
   }

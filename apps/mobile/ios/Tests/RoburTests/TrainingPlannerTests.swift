@@ -58,7 +58,7 @@ final class TrainingPlannerTests: XCTestCase {
     let blockedStart = calendar.date(bySettingHour: 17, minute: 0, second: 0, of: day(0))!
     let busy = [DateInterval(start: blockedStart, end: blockedStart.addingTimeInterval(3_600))]
     let result = TrainingPlanner.suggest(workouts: [], busy: busy, now: now, startHour: 17, endHour: 20, calendar: calendar)
-    XCTAssertEqual(result.first?.startDate, blockedStart.addingTimeInterval(3_600))
+    XCTAssertEqual(result.first?.startDate, blockedStart.addingTimeInterval(4_500))
     XCTAssertTrue(result.allSatisfy { entry in busy.allSatisfy { !TrainingPlanner.overlaps(DateInterval(start: entry.startDate, end: entry.endDate), $0) } })
     let allWeek = DateInterval(start: day(0), end: day(8))
     XCTAssertTrue(TrainingPlanner.suggest(workouts: [], busy: [allWeek], now: now, calendar: calendar).isEmpty)
@@ -168,6 +168,84 @@ final class TrainingPlannerTests: XCTestCase {
     XCTAssertNil(copy.calendarExternalID)
   }
 
+  func testDefaultWindowFindsMorningAndExtendedLunchGapsWithTransferTime() {
+    let morning = calendar.date(bySettingHour: 7, minute: 0, second: 0, of: day(1))!
+    let first = TrainingPlanner.suggest(workouts: [], existing: [], now: day(1), calendar: calendar)
+    XCTAssertEqual(first.first?.startDate, morning)
+    let lunchBusy = [
+      DateInterval(start: day(1), end: calendar.date(bySettingHour: 11, minute: 45, second: 0, of: day(1))!),
+      DateInterval(start: calendar.date(bySettingHour: 13, minute: 30, second: 0, of: day(1))!, end: day(2))
+    ]
+    let result = TrainingPlanner.suggest(workouts: [], categories: [.strength], busy: lunchBusy,
+      now: day(1), calendar: calendar)
+    XCTAssertEqual(result.first?.startDate, calendar.date(bySettingHour: 12, minute: 0, second: 0, of: day(1)))
+    XCTAssertFalse(result.first!.muscles.isEmpty)
+    XCTAssertTrue(lunchBusy.allSatisfy { event in
+      result.allSatisfy { $0.endDate.addingTimeInterval(600) <= event.start || $0.startDate.addingTimeInterval(-600) >= event.end }
+    })
+  }
+
+  func testBusyCalendarCannotSqueezeSessionIntoUnusableGap() {
+    let morningEnd = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: day(0))!
+    let gapEnd = morningEnd.addingTimeInterval(40 * 60)
+    let busy = [DateInterval(start: day(0), end: morningEnd), DateInterval(start: gapEnd, end: day(7))]
+    // Forty minutes cannot fit strength plus ten-minute transfers on both sides.
+    XCTAssertTrue(TrainingPlanner.suggest(workouts: [], categories: [.strength], busy: busy,
+      now: now, calendar: calendar).isEmpty)
+  }
+
+  func testShortGapCanUseMobilityWhenStrengthDoesNotFit() {
+    let gapStart = now.addingTimeInterval(-600)
+    let gapEnd = now.addingTimeInterval(25 * 60)
+    let busy = [DateInterval(start: day(0), end: gapStart), DateInterval(start: gapEnd, end: day(7))]
+    let result = TrainingPlanner.suggest(workouts: [workout("stretch", offset: -2, activity: .mobility)],
+      categories: [.strength, .mobility], busy: busy, now: now, calendar: calendar)
+    XCTAssertEqual(result.count, 1)
+    XCTAssertEqual(result.first?.activity, .mobility)
+    XCTAssertEqual(result.first?.startDate, now)
+  }
+
+  func testStrengthFocusUsesRecordedLabelsAndUpcomingPlans() {
+    let past = workout("legs", offset: -2, activity: .traditionalStrength)
+    let lower: Set<MuscleGroup> = [.quads, .hamstrings, .glutes, .calves]
+    let upper: Set<MuscleGroup> = [.chest, .back, .shoulders, .arms]
+    let focus = TrainingPlanner.suggestedMuscles(workouts: [past],
+      annotations: [past.id: WorkoutAnnotation(muscles: lower)], existing: [])
+    XCTAssertEqual(focus, upper)
+    let planned = PlanEntry(activity: .functionalStrength, startDate: day(1), durationMinutes: 30, muscles: upper)
+    XCTAssertEqual(TrainingPlanner.suggestedMuscles(workouts: [past],
+      annotations: [past.id: WorkoutAnnotation(muscles: lower)], existing: [planned]), [.core])
+    let result = TrainingPlanner.suggest(workouts: [], categories: [.strength], now: now, calendar: calendar)
+    XCTAssertEqual(Set(result.flatMap(\.muscles)), Set(MuscleGroup.allCases))
+  }
+
+  func testUpcomingMixStillIncludesSelectedCategoriesAfterEnduranceHeavyMonth() {
+    let recent = (-20 ... -1).map { workout("run-\($0)", offset: $0, activity: .running) }
+    let result = TrainingPlanner.suggest(workouts: recent, now: now, calendar: calendar)
+    XCTAssertEqual(Set(result.map { $0.activity.category }), [.endurance, .strength, .mobility])
+  }
+
+  func testStrengthSummaryVisibleInCalendarAndReminderWithPortableStateMarkers() {
+    var entry = PlanEntry(activity: .traditionalStrength, startDate: now, durationMinutes: 45,
+      muscles: [.back, .core])
+    XCTAssertEqual(entry.calendarTitle, "[Suggested] Traditional strength · Back, Core — Robur")
+    XCTAssertEqual(entry.reminderTitle, entry.calendarTitle)
+    var fullBody = entry
+    fullBody.muscles = Set(MuscleGroup.allCases)
+    XCTAssertEqual(fullBody.muscleSummary, "Full body")
+    XCTAssertTrue(fullBody.calendarTitle.contains("Full body"))
+    entry.reconcileExternalTitle("  [cOmPlEtEd] My back session")
+    XCTAssertEqual(entry.state, .completed)
+    XCTAssertTrue(entry.calendarTitle.hasPrefix("[Completed]"))
+    entry.reconcileExternalTitle("[Suggested] An older calendar title")
+    XCTAssertEqual(entry.state, .completed)
+    XCTAssertEqual(PlanEntry.rewritingTitle("[Suggested] [Confirmed] My custom lunch lift", state: .completed),
+      "[Completed] My custom lunch lift")
+    var suggested = PlanEntry(activity: .cycling, startDate: now, durationMinutes: 30)
+    suggested.reconcileExternalTitle("[Confirmed] Bike at lunch")
+    XCTAssertEqual(suggested.state, .confirmed)
+  }
+
   @MainActor
   func testManualSessionCanBeCreatedAndEditedWithoutExternalAccess() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -264,7 +342,7 @@ final class TrainingPlannerTests: XCTestCase {
   }
 
   @MainActor
-  func testDuplicateRescheduleAndRegeneratePreserveManualSessionsOffline() throws {
+  func testDuplicateRescheduleAndRegeneratePreserveManualSessionsOffline() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let url = directory.appending(path: "plan.json")
@@ -281,7 +359,7 @@ final class TrainingPlannerTests: XCTestCase {
     XCTAssertNil(copy.calendarEventID)
     XCTAssertNil(copy.reminderID)
     XCTAssertEqual(store.entries.first { $0.id == id }, original)
-    store.generateWeek(workouts: [], categories: [.endurance, .mobility], now: now, calendar: calendar)
+    await store.generateWeek(workouts: [], categories: [.endurance, .mobility], now: now, calendar: calendar)
     XCTAssertEqual(store.entries.first { $0.id == id }, original)
     XCTAssertEqual(store.entries.first { $0.id == copyID }, copy)
     XCTAssertEqual(TrainingPlannerStore(url: url, observeChanges: false, externalAccessDisabled: true).entries, store.entries)
@@ -304,31 +382,31 @@ final class TrainingPlannerTests: XCTestCase {
   }
 
   @MainActor
-  func testLocalPlanPersistsAndWriteFailureRollsBack() throws {
+  func testLocalPlanPersistsAndWriteFailureRollsBack() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let url = directory.appending(path: "plan.json")
     let store = TrainingPlannerStore(url: url, observeChanges: false, externalAccessDisabled: true)
-    store.generateWeek(workouts: [], categories: [.endurance], now: now, calendar: calendar)
+    await store.generateWeek(workouts: [], categories: [.endurance], now: now, calendar: calendar)
     XCTAssertEqual(store.entries.count, 3)
     XCTAssertEqual(TrainingPlannerStore(url: url, observeChanges: false, externalAccessDisabled: true).entries, store.entries)
 
     let blockedParent = directory.appending(path: "blocked")
     let blocked = TrainingPlannerStore(url: blockedParent.appending(path: "plan.json"), observeChanges: false, externalAccessDisabled: true)
     try Data("file, not a directory".utf8).write(to: blockedParent)
-    blocked.generateWeek(workouts: [], categories: [.strength], now: now, calendar: calendar)
+    await blocked.generateWeek(workouts: [], categories: [.strength], now: now, calendar: calendar)
     XCTAssertTrue(blocked.entries.isEmpty)
     XCTAssertNotNil(blocked.lastError)
   }
 
   @MainActor
-  func testUnreadableArchiveIsPreserved() throws {
+  func testUnreadableArchiveIsPreserved() async throws {
     let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: url) }
     let original = Data("incomplete archive".utf8)
     try original.write(to: url)
     let store = TrainingPlannerStore(url: url, observeChanges: false, externalAccessDisabled: true)
-    store.generateWeek(workouts: [], categories: [.mobility], now: now, calendar: calendar)
+    await store.generateWeek(workouts: [], categories: [.mobility], now: now, calendar: calendar)
     XCTAssertTrue(store.entries.isEmpty)
     XCTAssertNotNil(store.lastError)
     XCTAssertEqual(try Data(contentsOf: url), original)

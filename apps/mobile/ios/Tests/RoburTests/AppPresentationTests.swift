@@ -43,6 +43,23 @@ final class AppPresentationTests: XCTestCase {
         gymID: journal.gyms.first?.id, notes: "Deadlift and row session"), for: workout))
     }
     let monitor = GymMonitor(journal: journal, defaults: defaults)
+    let planner = TrainingPlannerStore(url: directory.appendingPathComponent("plan.json"),
+      observeChanges: false, externalAccessDisabled: true)
+    let weekStart = Calendar.current.dateInterval(of: .weekOfYear, for: now)!.start
+    let planned: [(Int, Int, WorkoutActivity, Set<MuscleGroup>, PlanEntryState)] = [
+      (0, 9, .functionalStrength, [.back, .chest, .shoulders, .arms], .completed),
+      (1, 7, .running, [], .confirmed),
+      (2, 12, .mobility, [], .suggested),
+      (3, 18, .traditionalStrength, [.quads, .hamstrings, .glutes, .calves, .core], .confirmed),
+      (5, 10, .cycling, [], .suggested),
+      (6, 11, .tennis, [], .suggested)
+    ]
+    for (day, hour, activity, muscles, state) in planned {
+      let date = Calendar.current.date(byAdding: .day, value: day, to: weekStart)!
+      let start = Calendar.current.date(bySettingHour: hour, minute: 0, second: 0, of: date)!
+      XCTAssertNotNil(planner.create(activity: activity, startDate: start, durationMinutes: 40,
+        muscles: muscles, state: state))
+    }
     let screens: [(String, AnyView)] = [
       ("today", AnyView(RoburTodayView())),
       ("workouts", AnyView(WorkoutHistoryView())),
@@ -50,7 +67,8 @@ final class AppPresentationTests: XCTestCase {
       ("insights", AnyView(ScrollView { HealthOverviewView().frame(maxWidth: RoburStyle.contentWidth).padding().frame(maxWidth: .infinity) }
         .background(RoburStyle.background))),
       ("places", AnyView(GymLocationsView())),
-      ("plan", AnyView(TrainingPlannerView())),
+      ("plan", AnyView(TrainingPlannerView(store: planner))),
+      ("plan-strength", AnyView(TrainingPlanEditor(entry: planner.entries[0], store: planner))),
       ("record", AnyView(WorkoutCaptureView())),
       ("review", AnyView(WorkoutReviewEditor(workout: workouts[0]))),
       ("review-cardio", AnyView(WorkoutReviewEditor(workout: workouts[1]))),
