@@ -7,7 +7,7 @@ web/API sync is deferred.
 
 ## Current status and release behavior
 
-As checked on 7 October 2026, GitHub's `production` environment already has:
+GitHub's `production` environment uses:
 
 | Variable | Value |
 | --- | --- |
@@ -15,12 +15,16 @@ As checked on 7 October 2026, GitHub's `production` environment already has:
 | `APP_STORE_CONNECT_APP_ID` | `6801487531` (Robur Health) |
 | `TESTFLIGHT_GROUP_NAME` | `Robur Test Group` |
 
-Robur has none of the five Apple secrets below at repository or environment
-scope. Claritas has them, but GitHub cannot export secret values. Use the
-original credential files/password, or create replacements. Do not revoke
-Claritas's certificate or API key when configuring Robur.
+The Apple signing secrets are configured and have delivered successful TestFlight
+releases. The manual account tasks below apply when setting up or rotating them.
 
-The workflow uses macOS 15 and Xcode 26.3, matching Claritas. Apple-source or
+The workflow pins `macos-15-intel` with Xcode 26.3 for both build and release jobs.
+The generic `macos-15` label routes to ARM runners; on 2 November 2026, run
+[41434330544](https://github.com/eojgroup/robur/actions/runs/41434330544) passed all
+128 tests and both iPad checks, but its release was cancelled before starting
+because GitHub could not acquire an ARM runner. Switching pools addresses that
+capacity failure. The [Intel image inventory](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md)
+includes the selected Xcode version. Apple-source or
 Apple-workflow pushes to `main` compile both apps, run simulator unit tests,
 then sign, archive, export, upload, wait for Apple processing, and deliver to
 `Robur Test Group`. PRs compile/test only. A successful compile alone does not
@@ -28,17 +32,10 @@ count as a release: missing credentials fail the TestFlight job.
 
 ## Verified release status
 
-[GitHub run 37598715928](https://github.com/eojgroup/robur/actions/runs/37598715928)
-verified the final source on 7 October 2026: both Apple app builds succeeded and
-all three simulator unit tests passed. Local TypeScript checks, 16 existing
-JavaScript tests, application builds, workflow linting, and six mocked
-App Store Connect distribution scenarios also passed.
-
-The TestFlight job stopped at its credential check, naming exactly the five
-secrets listed below. No signed archive or IPA was produced and no build was
-uploaded to Apple. Real provisioning, signing, upload, and group assignment
-remain to be verified after those credentials are supplied. Google Cloud
-production jobs were skipped as intended.
+[GitHub run 41354317014](https://github.com/eojgroup/robur/actions/runs/41354317014)
+successfully built, tested and released version 1.5.0. A green build job alone
+does not establish TestFlight availability: verify the archive/upload and final
+group-assignment steps too.
 
 ## One-time manual account tasks
 
