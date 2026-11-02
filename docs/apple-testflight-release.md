@@ -18,7 +18,7 @@ GitHub's `production` environment uses:
 The Apple signing secrets are configured and have delivered successful TestFlight
 releases. The manual account tasks below apply when setting up or rotating them.
 
-The workflow uses ARM (`macos-15`) for simulator testing and pins
+The workflow uses ARM (`macos-26`) for simulator testing and pins
 `macos-15-intel` for signing/distribution, both with Xcode 26.3.
 The generic `macos-15` label routes to ARM runners; on 2 November 2026, run
 [41434330544](https://github.com/eojgroup/robur/actions/runs/41434330544) passed all
@@ -26,8 +26,11 @@ The generic `macos-15` label routes to ARM runners; on 2 November 2026, run
 because GitHub could not acquire an ARM runner. Switching pools addresses that
 capacity failure. Running the simulator tests on Intel timed out in
 [41490297906](https://github.com/eojgroup/robur/actions/runs/41490297906), so only
-the archive/distribution job uses that pool. The [Intel image inventory](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md)
-includes the selected Xcode version. Apple-source or
+the archive/distribution job uses that pool. The newer ARM pool avoids the older
+macOS 15 queue. Both the [ARM image inventory](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md)
+and [Intel image inventory](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md)
+include the selected Xcode version. Simulator selection matches the pinned iOS
+SDK version rather than selecting an arbitrary installed runtime. Apple-source or
 Apple-workflow pushes to `main` compile both apps, run simulator unit tests,
 then sign, archive, export, upload, wait for Apple processing, and deliver to
 `Robur Test Group`. PRs compile/test only. A successful compile alone does not

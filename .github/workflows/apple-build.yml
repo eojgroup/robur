@@ -31,7 +31,7 @@ jobs:
   build:
     name: Compile iPhone, iPad, and Watch
     timeout-minutes: 35
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
 
@@ -84,8 +84,11 @@ jobs:
         working-directory: apps/mobile/ios
         run: |
           set -o pipefail
+          ROBUR_SIMULATOR_SDK="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          export ROBUR_SIMULATOR_SDK
           simulator_id="$(xcrun simctl list devices available -j | ruby -rjson -e '
-            devices = JSON.parse(STDIN.read).fetch("devices").values.flatten
+            runtime = "com.apple.CoreSimulator.SimRuntime.iOS-" + ENV.fetch("ROBUR_SIMULATOR_SDK").split(".").first(2).join("-")
+            devices = JSON.parse(STDIN.read).fetch("devices").fetch(runtime, [])
             simulator = devices.find { |device| device["isAvailable"] && device["name"].start_with?("iPhone") }
             abort("No available iPhone simulator found") unless simulator
             print simulator.fetch("udid")
@@ -118,8 +121,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          ROBUR_SIMULATOR_SDK="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          export ROBUR_SIMULATOR_SDK
           simulator_id="$(xcrun simctl list devices available -j | ruby -rjson -e '
-            devices = JSON.parse(STDIN.read).fetch("devices").values.flatten
+            runtime = "com.apple.CoreSimulator.SimRuntime.iOS-" + ENV.fetch("ROBUR_SIMULATOR_SDK").split(".").first(2).join("-")
+            devices = JSON.parse(STDIN.read).fetch("devices").fetch(runtime, [])
             simulator = devices.find { |device| device["isAvailable"] && device["name"].start_with?("iPad") }
             abort("No available iPad simulator found") unless simulator
             print simulator.fetch("udid")
