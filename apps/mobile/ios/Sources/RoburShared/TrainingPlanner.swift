@@ -26,6 +26,7 @@ struct PlanEntry: Identifiable, Codable, Equatable {
   // Keep a bounded recovery anchor when an unsynced local edit moves the session.
   var calendarLastKnownStartDate: Date?
   var calendarExternalID: String?
+  var calendarContainerID: String?
   var calendarLastModifiedDate: Date?
   var reminderLastModifiedDate: Date?
   var localModificationDate: Date?
@@ -118,7 +119,7 @@ enum TrainingPlanner {
                       preferredActivities: Set<WorkoutActivity> = [],
                       busy: [DateInterval] = [], now: Date = Date(),
                       startHour: Int = 7, endHour: Int = 21, transitionMinutes: Int = 10,
-                      calendar: Calendar = .current) -> [PlanEntry] {
+                      calendar: Calendar = .current, minimumNewSessions: Int = 0) -> [PlanEntry] {
     guard !categories.isEmpty, (0...23).contains(startHour), (1...24).contains(endHour), endHour > startHour,
           let limit = calendar.date(byAdding: .day, value: 7, to: now) else { return [] }
     let recentStart = calendar.date(byAdding: .day, value: -28, to: now) ?? now
@@ -127,8 +128,9 @@ enum TrainingPlanner {
       $0.start >= recentStart && $0.start <= now && $0.minutes.isFinite && $0.minutes > 0 && seen.insert($0.id).inserted
     }
     let lastWeek = calendar.date(byAdding: .day, value: -7, to: now) ?? now
-    let target = recent.filter { $0.start >= lastWeek }.count >= 4 ? 4 : 3
+    let usualTarget = recent.filter { $0.start >= lastWeek }.count >= 4 ? 4 : 3
     let retained = existing.filter { $0.startDate >= now && $0.startDate < limit }
+    let target = max(usualTarget, retained.count + min(7, max(0, minimumNewSessions)))
     guard retained.count < target else { return [] }
     var categoryCounts = Dictionary(grouping: recent, by: { $0.activityType.category }).mapValues(\.count)
     for entry in retained { categoryCounts[entry.activity.category, default: 0] += 1 }

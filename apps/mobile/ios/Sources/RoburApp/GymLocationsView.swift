@@ -1,6 +1,7 @@
 import SwiftUI
 import CoreLocation
 import Combine
+import MapKit
 
 @MainActor
 final class GymLocator: NSObject, ObservableObject, CLLocationManagerDelegate {
@@ -70,9 +71,11 @@ struct GymLocationsView: View {
   @EnvironmentObject private var monitor: GymMonitor
   @Environment(\.openURL) private var openURL
   @StateObject private var locator = GymLocator()
+  @StateObject private var mapSearch = GymMapSearch()
   @State private var adding = false
   @State private var name = ""
-  @State private var savePosition = false
+  @State private var positionSource = "maps"
+  @State private var searchGymID: UUID?
   @State private var deleting: GymLocation?
   @State private var updatingGymID: UUID?
 
@@ -134,7 +137,7 @@ struct GymLocationsView: View {
           HStack {
             Text("SAVED PLACES").font(.caption.bold()).foregroundStyle(.secondary)
             Spacer()
-            Button { updatingGymID = nil; name = ""; savePosition = false; adding = true } label: { Label("Add place", systemImage: "plus") }
+            Button { beginPlaceSearch() } label: { Label("Add place", systemImage: "plus") }
           }
           if journal.gyms.isEmpty {
             ContentUnavailableView("Make it your place", systemImage: "mappin.and.ellipse",
@@ -163,6 +166,8 @@ struct GymLocationsView: View {
                 updatingGymID = gym.id
                 locator.locate()
               }.font(.caption).disabled(locator.locating)
+              Button("Find this gym in Apple Maps", systemImage: "map") { beginPlaceSearch(gym: gym) }
+                .font(.caption)
             }.roburCard()
           }
           if !journal.visits.isEmpty {
@@ -190,7 +195,7 @@ struct GymLocationsView: View {
         }.padding()
       }.background(RoburStyle.background)
         .navigationTitle("Places").navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $adding) { addPlace }
+        .sheet(isPresented: $adding, onDismiss: { mapSearch.reset(); searchGymID = nil }) { addPlace }
         .onChange(of: locator.location) { _, location in
           guard let id = updatingGymID, let location else { return }
           journal.updateGymPosition(id: id, latitude: location.coordinate.latitude, longitude: location.coordinate.longitude)
@@ -210,10 +215,16 @@ struct GymLocationsView: View {
     NavigationStack {
       Form {
         if let error = journal.storageError { Text(error).foregroundStyle(.red) }
-        Section("Fitness centre") { TextField("Name", text: $name) }
+        Section("Fitness centre") { TextField("Name", text: $name).disabled(searchGymID != nil) }
         Section {
-          Toggle("Save current position", isOn: $savePosition)
-          if savePosition {
+          Picker("Choose location", selection: $positionSource) {
+            Text("Apple Maps").tag("maps")
+            Text("Current position").tag("current")
+            if searchGymID == nil { Text("Name only").tag("none") }
+          }
+          if positionSource == "maps" {
+            mapSearchFields
+          } else if positionSource == "current" {
             Button("Use current position") { locator.locate() }.disabled(locator.locating)
             if locator.locating { ProgressView() }
             if let location = locator.location, abs(location.timestamp.timeIntervalSinceNow) < 120 {
@@ -221,29 +232,107 @@ struct GymLocationsView: View {
             }
             if let message = locator.message { Text(message).font(.caption) }
           }
-        } footer: { Text("Stand at your gym to save its position. You can save a name without location permission.") }
+        } header: { Text("Position") } footer: { Text(positionHelp) }
       }
       .scrollContentBackground(.hidden).background(RoburStyle.background)
-      .navigationTitle("Add place")
+      .navigationTitle(searchGymID == nil ? "Add place" : "Gym position")
+      .onChange(of: mapSearch.selected) { _, place in
+        if let place, searchGymID == nil { name = place.name }
+      }
+      .onChange(of: positionSource) { _, _ in mapSearch.reset() }
       .toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { adding = false } }
         ToolbarItem(placement: .confirmationAction) {
-          Button("Save") {
-            if savePosition {
-              guard let fix = locator.location, abs(fix.timestamp.timeIntervalSinceNow) < 120 else {
-                locator.locate()
-                return
-              }
-            }
-            let position = savePosition ? locator.location : nil
-            if journal.addGym(name: name, latitude: position?.coordinate.latitude, longitude: position?.coordinate.longitude) {
-              adding = false
-            }
-          }
-          .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                    (savePosition && (locator.location == nil || abs(locator.location!.timestamp.timeIntervalSinceNow) >= 120 || locator.locating)))
+          Button("Save") { savePlace() }.disabled(!canSavePlace)
         }
       }
+    }
+  }
+
+  private var positionHelp: String {
+    switch positionSource {
+    case "maps": return "Search anywhere by name and city. Select a result, check the pin, then save. Searches are sent to Apple Maps."
+    case "current": return "Use this while at your gym to save your current position."
+    default: return "Save a name now and add its map position later."
+    }
+  }
+
+  @ViewBuilder private var mapSearchFields: some View {
+    TextField("Gym name, city or address", text: $mapSearch.query)
+      .submitLabel(.search).onSubmit { mapSearch.find() }
+      .accessibilityIdentifier("gym-map-query")
+    HStack {
+      Button("Search Apple Maps", systemImage: "magnifyingglass") { mapSearch.find() }
+        .disabled(mapSearch.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || mapSearch.isSearching)
+      if mapSearch.isSearching {
+        ProgressView()
+        Button("Cancel") { mapSearch.reset() }
+      }
+    }
+    if let message = mapSearch.message { Text(message).font(.caption).foregroundStyle(.secondary) }
+    ForEach(mapSearch.results) { place in mapResult(place) }
+    if let selected = mapSearch.selected { mapPreview(selected) }
+  }
+
+  private func mapResult(_ place: GymMapPlace) -> some View {
+    Button { mapSearch.select(place) } label: {
+      HStack(alignment: .top) {
+        VStack(alignment: .leading, spacing: 4) {
+          Text(place.name).font(.headline)
+          Text(place.address).font(.caption).foregroundStyle(.secondary)
+        }
+        Spacer()
+        Image(systemName: mapSearch.selected?.id == place.id ? "checkmark.circle.fill" : "circle")
+      }
+    }.buttonStyle(.plain)
+  }
+
+  @ViewBuilder private func mapPreview(_ selected: GymMapPlace) -> some View {
+    Map(initialPosition: .region(MKCoordinateRegion(center: selected.coordinate,
+      latitudinalMeters: 800, longitudinalMeters: 800))) {
+      Marker(selected.name, coordinate: selected.coordinate)
+    }
+    .frame(height: 180).clipShape(RoundedRectangle(cornerRadius: 12)).id(selected.id)
+    Button("View in Apple Maps", systemImage: "arrow.up.right.square") {
+      let item = MKMapItem(placemark: MKPlacemark(coordinate: selected.coordinate))
+      item.name = selected.name
+      item.openInMaps()
+    }
+  }
+
+  private func beginPlaceSearch(gym: GymLocation? = nil) {
+    updatingGymID = nil
+    searchGymID = gym?.id
+    name = gym?.name ?? ""
+    mapSearch.reset()
+    mapSearch.query = gym?.name ?? ""
+    positionSource = "maps"
+    adding = true
+  }
+
+  private var canSavePlace: Bool {
+    guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+    if positionSource == "maps" { return mapSearch.selected != nil && !mapSearch.isSearching }
+    if positionSource == "current" {
+      guard let fix = locator.location else { return false }
+      return abs(fix.timestamp.timeIntervalSinceNow) < 120 && !locator.locating
+    }
+    return searchGymID == nil
+  }
+
+  private func savePlace() {
+    guard canSavePlace else { return }
+    let latitude: Double?, longitude: Double?
+    if positionSource == "maps", let place = mapSearch.selected {
+      latitude = place.latitude; longitude = place.longitude
+    } else if positionSource == "current", let fix = locator.location {
+      latitude = fix.coordinate.latitude; longitude = fix.coordinate.longitude
+    } else { latitude = nil; longitude = nil }
+    if let id = searchGymID, let latitude, let longitude {
+      journal.updateGymPosition(id: id, latitude: latitude, longitude: longitude)
+      if journal.storageError == nil { adding = false }
+    } else if searchGymID == nil && journal.addGym(name: name, latitude: latitude, longitude: longitude) {
+      adding = false
     }
   }
 }

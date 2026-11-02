@@ -307,3 +307,30 @@ sync cancellation. Generate around a read-only work calendar with morning/lunch
 gaps and an all-day busy event. Verify week navigation, large text, light/dark mode
 and narrow iPad windows. Automated fixtures cover state transitions, old archives,
 conflicts, buffers, DST and muscle/category rotation; account sync needs a device.
+
+### Calendar actions and remote places 1.5.1
+
+Calendar actions queue behind an active refresh and show their result immediately.
+Sync progress and errors appear above the weekly overview. The training-time search
+reports when existing sessions already meet its usual weekly suggestion count and
+offers an explicit **Suggest one more session** action; confirmed and linked plans
+are preserved. A busy calendar produces an explanation rather than an empty result.
+
+Deleting a session in Robur removes its owned Calendar event and linked reminders.
+Removing its Calendar placeholder also removes its linked reminders while retaining
+the local session. An external Calendar deletion is reconciled when Robur is open
+or reopened and removes associated reminders, including owned duplicates and items
+moved to another list. Permission or provider failures keep cleanup retryable; the
+app never matches unrelated reminders by title.
+
+Places supports Apple Maps search by gym name, city or address without requesting
+the current device location. Select a result, inspect its pin/address, and save.
+Existing places can also receive a searched position. Current-position and name-only
+entry remain available. Searches use Apple Maps over the network; stored places
+remain local. Cancellation, edited queries and timeouts invalidate stale results.
+
+Device checks: tap Add while a refresh runs; check the named destination calendar
+and visible result; delete the event externally and return to Robur; remove a session
+in-app and check its reminders; retry offline cleanup without duplicates. Search a
+gym in another city with Location denied, select its pin, and save. Calendar account
+sync and live search results still require device/network validation.

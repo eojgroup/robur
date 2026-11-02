@@ -31,6 +31,23 @@ final class TrainingPlannerTests: XCTestCase {
     XCTAssertTrue(TrainingPlanner.suggest(workouts: recent, existing: first, now: now, calendar: calendar).isEmpty)
   }
 
+  func testExplicitRequestCanFindOneMoreSlotWithoutMovingExistingPlans() {
+    let existing = TrainingPlanner.suggest(workouts: [], now: now, calendar: calendar)
+    let original = existing
+    XCTAssertTrue(TrainingPlanner.suggest(workouts: [], existing: existing, now: now, calendar: calendar).isEmpty)
+    let extra = TrainingPlanner.suggest(workouts: [], existing: existing, now: now,
+      calendar: calendar, minimumNewSessions: 1)
+    XCTAssertEqual(extra.count, 1)
+    XCTAssertEqual(existing, original)
+    for candidate in extra {
+      let slot = DateInterval(start: candidate.startDate, end: candidate.endDate)
+      for retained in existing {
+        XCTAssertFalse(TrainingPlanner.overlaps(slot,
+          DateInterval(start: retained.startDate, end: retained.endDate)))
+      }
+    }
+  }
+
   func testLessTrainedSelectedCategoriesComeFirst() {
     let result = TrainingPlanner.suggest(workouts: [workout("run", offset: -1, activity: .running)],
       categories: [.endurance, .mobility], now: now, calendar: calendar)
@@ -148,6 +165,7 @@ final class TrainingPlannerTests: XCTestCase {
     source.reminderSyncPending = true
     source.calendarLastKnownStartDate = now
     source.calendarExternalID = "provider-identity"
+    source.calendarContainerID = "provider-calendar"
     let copy = source.duplicated(startDate: day(2))
     XCTAssertFalse(copy.id == source.id)
     XCTAssertFalse(copy.url == source.url)
@@ -166,6 +184,7 @@ final class TrainingPlannerTests: XCTestCase {
     XCTAssertNil(copy.reminderSyncPending)
     XCTAssertNil(copy.calendarLastKnownStartDate)
     XCTAssertNil(copy.calendarExternalID)
+    XCTAssertNil(copy.calendarContainerID)
   }
 
   func testDefaultWindowFindsMorningAndExtendedLunchGapsWithTransferTime() {
