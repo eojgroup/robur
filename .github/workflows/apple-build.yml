@@ -31,8 +31,7 @@ jobs:
   build:
     name: Compile iPhone, iPad, and Watch
     timeout-minutes: 35
-    # Pin the Intel pool; macos-15 routes to ARM and can fail runner acquisition.
-    runs-on: macos-15-intel
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
 
@@ -171,6 +170,8 @@ jobs:
     name: Archive and distribute to TestFlight
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.distribute_to_testflight == true))
     needs: build
+    # Archive on Intel to avoid ARM runner acquisition failures. Simulator tests
+    # stay on ARM, where the pinned Xcode image has passed both device suites.
     runs-on: macos-15-intel
     environment: production
     timeout-minutes: 60
