@@ -43,8 +43,9 @@ final class AppPresentationTests: XCTestCase {
         gymID: journal.gyms.first?.id, notes: "Deadlift and row session"), for: workout))
     }
     let monitor = GymMonitor(journal: journal, defaults: defaults)
+    let calendarFixture = PlannerCalendarFixture()
     let planner = TrainingPlannerStore(url: directory.appendingPathComponent("plan.json"),
-      observeChanges: false, externalAccessDisabled: true)
+      observeChanges: false, worker: calendarFixture)
     let weekStart = Calendar.current.dateInterval(of: .weekOfYear, for: now)!.start
     let planned: [(Int, Int, WorkoutActivity, Set<MuscleGroup>, PlanEntryState)] = [
       (0, 9, .functionalStrength, [.back, .chest, .shoulders, .arms], .completed),
@@ -60,6 +61,24 @@ final class AppPresentationTests: XCTestCase {
       XCTAssertNotNil(planner.create(activity: activity, startDate: start, durationMinutes: 40,
         muscles: muscles, state: state))
     }
+    if !planner.entries.contains(where: { Calendar.current.isDate($0.startDate, inSameDayAs: now) }) {
+      let today = Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: now)!
+      XCTAssertNotNil(planner.create(activity: .functionalStrength, startDate: today, durationMinutes: 40,
+        muscles: [.back, .core], state: .confirmed))
+    }
+    let focus = planner.entries.first { Calendar.current.isDate($0.startDate, inSameDayAs: now) }!
+    let firstStrength = planner.entries.first { $0.activity.category == .strength }!
+    calendarFixture.events = [
+      TrainingCalendarEvent(id: "work-meeting", title: "Project review", calendarTitle: "Work",
+        startDate: focus.startDate.addingTimeInterval(600), endDate: focus.endDate.addingTimeInterval(1_200)),
+      TrainingCalendarEvent(id: "strength-overlap", title: "Team planning", calendarTitle: "Work",
+        startDate: firstStrength.startDate.addingTimeInterval(-900), endDate: firstStrength.endDate),
+      TrainingCalendarEvent(id: "flexible-day", title: "Working from home", calendarTitle: "Personal",
+        startDate: weekStart, endDate: Calendar.current.date(byAdding: .day, value: 7, to: weekStart)!,
+        isAllDay: true, blocksTime: false)
+    ]
+    await planner.reconcile()
+    await planner.loadCalendarEvents(in: Calendar.current.dateInterval(of: .weekOfYear, for: now)!)
     let screens: [(String, AnyView)] = [
       ("today", AnyView(RoburTodayView())),
       ("workouts", AnyView(WorkoutHistoryView())),
@@ -120,4 +139,27 @@ final class AppPresentationTests: XCTestCase {
     XCTAssertEqual(AdaptiveCardLayout.columnCount(for: 393), 1)
   }
 
+}
+
+private final class PlannerCalendarFixture: TrainingPlanEventWorking {
+  var events: [TrainingCalendarEvent] = []
+  func requestAccess(reminders: Bool) async throws -> Bool { true }
+  func availability(now: Date, calendar: Calendar) async throws -> [DateInterval] {
+    events.filter(\.blocksTime).map { DateInterval(start: $0.startDate, end: $0.endDate) }
+  }
+  func calendarEvents(in interval: DateInterval) async throws -> [TrainingCalendarEvent] {
+    events.filter { $0.startDate < interval.end && $0.endDate > interval.start }
+  }
+  func refresh(entries: [PlanEntry], settings: TrainingPlanEventWorker.Settings) async throws -> TrainingPlanEventWorker.Snapshot {
+    .init(entries: entries, calendarAccess: true, reminderAccess: false,
+      calendars: [.init(calendarIdentifier: "preview", title: "Training")], reminderLists: [],
+      defaultCalendarID: "preview", defaultReminderListID: nil, busy: [])
+  }
+  func syncCalendarChanges(entries: [PlanEntry]) async throws -> [PlanEntry] { entries }
+  func syncReminders(entries: [PlanEntry], settings: TrainingPlanEventWorker.Settings) async throws -> [PlanEntry] { entries }
+  func remove(entry: PlanEntry, includeReminders: Bool) async throws { }
+  func export(entries: [PlanEntry], settings: TrainingPlanEventWorker.Settings, ids: Set<UUID>?, allowReExport: Bool,
+              progress: @escaping ([PlanEntry]) -> Void) async throws -> TrainingPlanEventWorker.ExportResult {
+    .init(entries: entries)
+  }
 }

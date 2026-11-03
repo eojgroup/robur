@@ -334,3 +334,28 @@ and visible result; delete the event externally and return to Robur; remove a se
 in-app and check its reminders; retry offline cleanup without duplicates. Search a
 gym in another city with Location denied, select its pin, and save. Calendar account
 sync and live search results still require device/network validation.
+
+## Flexible Calendar planning 1.6
+
+Calendar overlaps are advisory. Creating, editing and explicitly exporting a
+training session remain available even when an existing event occupies that time.
+Suggestions search the entire week for free slots first, then offer editable
+alternatives with the least overlapping time when the calendar is full. The
+training mix and spacing between strength days still apply.
+
+The Plan tab opens a combined Calendar/training overview: a week grid, selected-day
+time chart and agenda distinguish existing Calendar events, Robur sessions and
+actual overlaps. All-day and free events are identified separately. Session cards
+mark conflicts; the editor shows a timing comparison and the affected items.
+Calendar titles and source names are held in memory for the displayed period and
+are never written into the training-plan archive. Only an explicit Add writes a
+Calendar event. A session's own exported event is not counted as a conflict.
+
+Device checks: generate a week fully occupied by events; verify suggestions still
+appear with warnings, then create and add a conflicting session successfully.
+Check an all-day event marked Free, overlapping recurring appointments, moving a
+session across midnight, and a linked session alongside its own event. Navigate
+weeks quickly and return from Calendar edits; verify the displayed dates and
+warnings refresh. Test denied access/offline refresh without a false clear-calendar
+message. Phone and iPad screenshots plus overlap/scheduling/snapshot regressions
+cover local behavior; live Calendar account sync requires a device.

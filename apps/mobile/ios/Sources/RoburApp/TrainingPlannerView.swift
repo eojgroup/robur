@@ -19,6 +19,7 @@ struct TrainingPlannerView: View {
   @State private var addingCalendarIDs: Set<UUID> = []
   @State private var resultMessage: String?
   @State private var offerExtraSession = false
+  @State private var calendarOverview = true
 
   init(store: TrainingPlannerStore? = nil) {
     _store = StateObject(wrappedValue: store ?? .shared)
@@ -39,7 +40,8 @@ struct TrainingPlannerView: View {
   }
   private var visible: [PlanEntry] {
     guard let selectedDay else { return weekEntries }
-    return weekEntries.filter { Calendar.current.isDate($0.startDate, inSameDayAs: selectedDay) }
+    guard let day = Calendar.current.dateInterval(of: .day, for: selectedDay) else { return [] }
+    return store.entries.filter { $0.startDate < day.end && $0.endDate > day.start }.sorted { $0.startDate < $1.startDate }
   }
   private var coveredMuscles: Set<MuscleGroup> {
     Set(weekEntries.filter { $0.activity.category == .strength }.flatMap { $0.muscles })
@@ -58,8 +60,20 @@ struct TrainingPlannerView: View {
             VStack(alignment: .leading, spacing: 12) { planHeading; newSessionButton }
           }
           syncStatus
-          overviewCard
-          Button(generating ? "Finding training time…" : "Find free training time", systemImage: "sparkles") { generatePlan() }
+          Picker("Overview", selection: $calendarOverview) {
+            Text("Calendar & sessions").tag(true)
+            Text("Training overview").tag(false)
+          }.pickerStyle(.segmented)
+          if calendarOverview {
+            weekNavigation
+            TrainingCalendarView(week: week, events: store.calendarEvents, entries: store.entries,
+              isLoading: store.calendarEventsLoading, error: store.calendarEventsError,
+              calendarAccess: store.calendarAccess, onEdit: { store.focusedEntryID = $0 },
+              onConnect: {
+                Task { await store.requestCalendarAccess(); await store.loadCalendarEvents(in: week) }
+              }, selection: $selectedDay)
+          } else { overviewCard }
+          Button(generating ? "Finding training time…" : "Suggest training sessions", systemImage: "sparkles") { generatePlan() }
             .buttonStyle(.borderedProminent).disabled(categories.isEmpty || generating)
             .accessibilityIdentifier("generate-training-plan")
           if generating { ProgressView("Checking your calendars…") }
@@ -90,6 +104,7 @@ struct TrainingPlannerView: View {
       .background(RoburStyle.background)
       .navigationTitle("Plan").navigationBarTitleDisplayMode(.inline)
       .task { await store.reconcile() }
+      .task(id: week.start) { await store.loadCalendarEvents(in: week) }
       .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await store.reconcile() } } }
       .sheet(item: Binding(get: { store.entries.first { $0.id == store.focusedEntryID } },
                            set: { if $0 == nil { store.focusedEntryID = nil } })) { entry in
@@ -99,8 +114,8 @@ struct TrainingPlannerView: View {
       .onChange(of: store.actionMessage) { _, message in
         if message != nil { presentCalendarResult() }
       }
-      .onChange(of: store.focusedEntryID) { _, _ in presentCalendarResult() }
-      .onChange(of: newEntry?.id) { _, _ in presentCalendarResult() }
+      .onChange(of: store.focusedEntryID) { _, _ in presentCalendarResult(); restoreCalendarWindow() }
+      .onChange(of: newEntry?.id) { _, _ in presentCalendarResult(); restoreCalendarWindow() }
       .alert("Training plan", isPresented: Binding(get: { resultMessage != nil }, set: { if !$0 { resultMessage = nil } })) {
         if offerExtraSession { Button("Suggest one more session") { generatePlan(minimumNewSessions: 1) } }
         Button("OK", role: .cancel) { }
@@ -116,7 +131,7 @@ struct TrainingPlannerView: View {
       .buttonStyle(.borderedProminent).accessibilityIdentifier("new-training-session")
   }
 
-  private var overviewCard: some View {
+  private var weekNavigation: some View {
     VStack(alignment: .leading, spacing: 16) {
       HStack {
         Button { moveWeek(-1) } label: { Image(systemName: "chevron.left") }.accessibilityLabel("Previous week")
@@ -131,6 +146,12 @@ struct TrainingPlannerView: View {
         Button { moveWeek(1) } label: { Image(systemName: "chevron.right") }.accessibilityLabel("Next week")
       }
       if weekOffset != 0 { Button("This week") { weekOffset = 0; selectedDay = nil }.font(.caption) }
+    }
+  }
+
+  private var overviewCard: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      weekNavigation
       Chart {
         ForEach(weekEntries) { entry in
           BarMark(x: .value("Day", Calendar.current.startOfDay(for: entry.startDate), unit: .day),
@@ -274,7 +295,7 @@ struct TrainingPlannerView: View {
         }))
       }
       Picker("Find slots", selection: $schedulingMode) {
-        Text("Calendar gaps").tag("gaps")
+        Text("Flexible times").tag("gaps")
         Text("Custom hours").tag("custom")
       }.pickerStyle(.segmented)
       if schedulingMode == "custom" {
@@ -285,7 +306,7 @@ struct TrainingPlannerView: View {
         .onChange(of: startHour) { _, hour in if endHour <= hour { endHour = hour + 1 } }
         .onChange(of: endHour) { _, hour in if startHour >= hour { startHour = hour - 1 } }
       }
-      Text(schedulingMode == "gaps" ? "Morning, lunch and evening gaps, 07:00–21:00. " + (store.calendarAccess ? "Checks all readable calendars." : "Connect Calendar to check existing events.") : store.calendarAccess ? "Finds morning, lunch and evening gaps across your readable calendars within this window." :
+      Text(schedulingMode == "gaps" ? "Prefers morning, lunch and evening gaps, 07:00–21:00. " + (store.calendarAccess ? "Busy periods can still be suggested with an overlap warning." : "Connect Calendar to show existing events.") : store.calendarAccess ? "Prefers available time within this window; overlaps are allowed and marked." :
         "Connect Calendar to fit suggestions around your existing events.")
         .font(.caption).foregroundStyle(.secondary)
       Text("Suggestions cover the next seven days and balance your selected training types and recent muscle focus.")
@@ -350,6 +371,11 @@ struct TrainingPlannerView: View {
           systemImage: "figure.strengthtraining.traditional")
           .font(.subheadline.weight(.medium)).foregroundStyle(RoburStyle.orange)
       }
+      let overlaps = TrainingCalendar.conflicts(for: entry, events: store.calendarEvents, plans: store.entries)
+      if !overlaps.isEmpty {
+        Label("\(overlaps.count) overlapping item\(overlaps.count == 1 ? "" : "s") · can still add",
+          systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(RoburStyle.orange)
+      }
       if entry.calendarSyncPending == true || entry.reminderSyncPending == true {
         Label("Sync pending", systemImage: "arrow.clockwise").font(.caption).foregroundStyle(.secondary)
       } else if entry.calendarEventID != nil {
@@ -409,15 +435,16 @@ struct TrainingPlannerView: View {
         startHour: schedulingMode == "gaps" ? 7 : startHour, endHour: schedulingMode == "gaps" ? 21 : endHour,
         minimumNewSessions: minimumNewSessions)
       weekOffset = 0; selectedDay = nil
+      await store.loadCalendarEvents(in: week)
       let limit = Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()
       let planned = store.entries.filter { $0.startDate >= Date() && $0.startDate < limit }.count
       offerExtraSession = added == 0 && planned >= 3 && minimumNewSessions == 0
       if let added, added > 0 {
-        resultMessage = "Found \(added) training slot\(added == 1 ? "" : "s") in the next seven days. Review the suggestions in your plan before adding them to Calendar."
+        resultMessage = "Added \(added) editable suggestion\(added == 1 ? "" : "s") for the next seven days. Available time is preferred; overlapping sessions are marked and can still be saved or added to Calendar."
       } else if offerExtraSession {
         resultMessage = "You already have \(planned) sessions in the next seven days. Your existing sessions were kept. You can ask for one more suggestion or edit a session to move it."
       } else if added == 0 {
-        resultMessage = "No suitable new slot fits your calendar, training mix and time window. Try wider hours or another training type in Suggestions & calendar settings."
+        resultMessage = "No new session fits the remaining training days and time window. Calendar overlaps are allowed. Try wider hours or another training type in Suggestions & calendar settings."
       } else { resultMessage = store.lastError ?? "The search did not finish. Your existing plan was kept. Please retry." }
     }
   }
@@ -427,6 +454,11 @@ struct TrainingPlannerView: View {
     offerExtraSession = false
     resultMessage = message
     store.actionMessage = nil
+  }
+
+  private func restoreCalendarWindow() {
+    guard store.focusedEntryID == nil, newEntry == nil else { return }
+    Task { await store.loadCalendarEvents(in: week) }
   }
 
   private func createSession() {
@@ -472,6 +504,19 @@ struct TrainingPlanEditor: View {
 
   private var savedEntry: PlanEntry { store.entries.first { $0.id == entry.id } ?? entry }
   private var isUnsaved: Bool { isNew && !hasCreatedEntry }
+  private var calendarSearchWindow: DateInterval {
+    let week = Calendar.current.dateInterval(of: .weekOfYear, for: entry.startDate) ??
+      DateInterval(start: Calendar.current.startOfDay(for: entry.startDate), duration: 604_800)
+    return DateInterval(start: week.start, end: max(week.end, entry.endDate))
+  }
+  private var calendarDataCoversSession: Bool {
+    guard let window = store.calendarWindow else { return false }
+    return window.start <= entry.startDate && window.end >= entry.endDate && store.calendarEventsError == nil
+  }
+  private var sessionEvents: [TrainingCalendarEvent] { calendarDataCoversSession ? store.calendarEvents : [] }
+  private var overlaps: [TrainingCalendarConflict] {
+    TrainingCalendar.conflicts(for: entry, events: sessionEvents, plans: store.entries)
+  }
 
   var body: some View {
     NavigationStack {
@@ -501,6 +546,7 @@ struct TrainingPlanEditor: View {
         } else if !entry.muscles.isEmpty {
           Section { DisclosureGroup("Muscle focus") { muscleFocusFields } }
         }
+        calendarFitSection
         Section("Move session") {
           Button("One day later") { moveDraft(days: 1) }
           Button("One week later") { moveDraft(days: 7) }
@@ -560,6 +606,7 @@ struct TrainingPlanEditor: View {
         }
       }
       .navigationTitle(isUnsaved ? "New session" : "Edit session").navigationBarTitleDisplayMode(.inline)
+      .task(id: calendarSearchWindow) { await store.loadCalendarEvents(in: calendarSearchWindow) }
       .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
       .confirmationDialog("Remove this session from Calendar?", isPresented: $showingCalendarRemoval, titleVisibility: .visible) {
         Button("Remove from Calendar", role: .destructive) {
@@ -580,6 +627,37 @@ struct TrainingPlanEditor: View {
         }
       }
     }.tint(RoburStyle.orange)
+  }
+
+  private var calendarFitSection: some View {
+    Section("Calendar fit") {
+      if !overlaps.isEmpty {
+        TrainingOverlapPreview(entry: entry, conflicts: overlaps)
+        let minutes = Int(TrainingCalendar.overlappingMinutes(for: entry, events: sessionEvents, plans: store.entries).rounded(.up))
+        Label("\(minutes) min overlaps · you can still save and add", systemImage: "exclamationmark.triangle.fill")
+          .font(.callout).foregroundStyle(RoburStyle.orange)
+        ForEach(overlaps) { item in
+          VStack(alignment: .leading, spacing: 3) {
+            Text(item.title).font(.subheadline.weight(.medium))
+            Text(item.calendarTitle + " · " + (item.isAllDay ? "All day" :
+              item.startDate.formatted(date: .omitted, time: .shortened) + "–" + item.endDate.formatted(date: .omitted, time: .shortened)))
+              .font(.caption).foregroundStyle(.secondary)
+          }
+        }
+      }
+      if store.calendarEventsLoading { ProgressView("Checking calendar…") }
+      else if let error = store.calendarEventsError { Text(error).font(.caption).foregroundStyle(.secondary) }
+      else if store.calendarAccess && calendarDataCoversSession && overlaps.isEmpty {
+        Label("No overlaps in the connected calendars", systemImage: "checkmark.circle").foregroundStyle(.secondary)
+      }
+      if !store.calendarAccess {
+        Button("Connect Calendar to see existing events") {
+          Task { await store.requestCalendarAccess(); await store.loadCalendarEvents(in: calendarSearchWindow) }
+        }
+      }
+      Text("Calendar conflicts are advisory. Saving a session or adding it to Calendar is always allowed.")
+        .font(.caption).foregroundStyle(.secondary)
+    }
   }
 
   private var muscleFocusFields: some View {
@@ -656,5 +734,28 @@ struct TrainingPlanEditor: View {
     }
     Text("Saves locally first, then adds only this session. Calendar access is requested if needed.")
       .font(.caption).foregroundStyle(.secondary)
+  }
+}
+
+private struct TrainingOverlapPreview: View {
+  let entry: PlanEntry
+  let conflicts: [TrainingCalendarConflict]
+  private var bounds: ClosedRange<Date> {
+    entry.startDate.addingTimeInterval(-900)...entry.endDate.addingTimeInterval(900)
+  }
+  var body: some View {
+    Chart {
+      BarMark(xStart: .value("Start", entry.startDate), xEnd: .value("End", entry.endDate), y: .value("Source", "Robur"))
+        .foregroundStyle(RoburStyle.orange)
+      ForEach(conflicts) { item in
+        BarMark(xStart: .value("Start", max(bounds.lowerBound, item.startDate)),
+          xEnd: .value("End", min(bounds.upperBound, item.endDate)), y: .value("Source", "Calendar / plan"))
+          .foregroundStyle(Color.red.opacity(0.7))
+      }
+    }
+    .chartXScale(domain: bounds)
+    .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) { AxisValueLabel(format: .dateTime.hour().minute()) } }
+    .frame(height: 100)
+    .accessibilityLabel("Your workout overlaps the calendar or planned sessions shown below")
   }
 }

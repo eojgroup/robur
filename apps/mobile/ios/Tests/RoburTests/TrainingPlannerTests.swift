@@ -78,7 +78,8 @@ final class TrainingPlannerTests: XCTestCase {
     XCTAssertEqual(result.first?.startDate, blockedStart.addingTimeInterval(4_500))
     XCTAssertTrue(result.allSatisfy { entry in busy.allSatisfy { !TrainingPlanner.overlaps(DateInterval(start: entry.startDate, end: entry.endDate), $0) } })
     let allWeek = DateInterval(start: day(0), end: day(8))
-    XCTAssertTrue(TrainingPlanner.suggest(workouts: [], busy: [allWeek], now: now, calendar: calendar).isEmpty)
+    XCTAssertTrue(TrainingPlanner.suggest(workouts: [], busy: [allWeek], now: now, calendar: calendar,
+      allowCalendarOverlaps: false).isEmpty)
   }
 
   func testTouchingEventBoundaryIsNotAConflict() {
@@ -210,7 +211,7 @@ final class TrainingPlannerTests: XCTestCase {
     let busy = [DateInterval(start: day(0), end: morningEnd), DateInterval(start: gapEnd, end: day(7))]
     // Forty minutes cannot fit strength plus ten-minute transfers on both sides.
     XCTAssertTrue(TrainingPlanner.suggest(workouts: [], categories: [.strength], busy: busy,
-      now: now, calendar: calendar).isEmpty)
+      now: now, calendar: calendar, allowCalendarOverlaps: false).isEmpty)
   }
 
   func testShortGapCanUseMobilityWhenStrengthDoesNotFit() {
@@ -218,7 +219,7 @@ final class TrainingPlannerTests: XCTestCase {
     let gapEnd = now.addingTimeInterval(25 * 60)
     let busy = [DateInterval(start: day(0), end: gapStart), DateInterval(start: gapEnd, end: day(7))]
     let result = TrainingPlanner.suggest(workouts: [workout("stretch", offset: -2, activity: .mobility)],
-      categories: [.strength, .mobility], busy: busy, now: now, calendar: calendar)
+      categories: [.strength, .mobility], busy: busy, now: now, calendar: calendar, allowCalendarOverlaps: false)
     XCTAssertEqual(result.count, 1)
     XCTAssertEqual(result.first?.activity, .mobility)
     XCTAssertEqual(result.first?.startDate, now)
@@ -236,6 +237,63 @@ final class TrainingPlannerTests: XCTestCase {
       annotations: [past.id: WorkoutAnnotation(muscles: lower)], existing: [planned]), [.core])
     let result = TrainingPlanner.suggest(workouts: [], categories: [.strength], now: now, calendar: calendar)
     XCTAssertEqual(Set(result.flatMap(\.muscles)), Set(MuscleGroup.allCases))
+  }
+
+  func testFullCalendarStillProducesBalancedEditableSuggestions() {
+    let busy = [DateInterval(start: day(0), end: day(8))]
+    let result = TrainingPlanner.suggest(workouts: [], busy: busy, now: now, calendar: calendar)
+    XCTAssertEqual(result.count, 3)
+    XCTAssertEqual(Set(result.map { $0.activity.category }), [.endurance, .strength, .mobility])
+    XCTAssertTrue(result.allSatisfy { $0.state == .suggested && !$0.calendarWasExported })
+    for entry in result {
+      XCTAssertGreaterThan(TrainingCalendar.overlappingSeconds(
+        in: DateInterval(start: entry.startDate, end: entry.endDate), with: busy), 0)
+    }
+  }
+
+  func testFreeSlotsAcrossWholeWeekComeBeforeAnyOverlappingFallback() {
+    let busy = [0, 2, 4, 6].map { DateInterval(start: day($0), end: day($0 + 1)) }
+    let result = TrainingPlanner.suggest(workouts: [], categories: [.endurance], busy: busy,
+      now: day(0), calendar: calendar)
+    XCTAssertEqual(result.count, 3)
+    XCTAssertEqual(Set(result.map { calendar.dateComponents([.day], from: day(0), to: calendar.startOfDay(for: $0.startDate)).day! }), [1, 3, 5])
+    for entry in result {
+      XCTAssertEqual(TrainingCalendar.overlappingSeconds(in: DateInterval(start: entry.startDate, end: entry.endDate), with: busy), 0)
+    }
+  }
+
+  func testFallbackUsesSmallestActualOverlapAndAvoidsOtherRoburSessions() {
+    let anchor = day(1)
+    var busy: [DateInterval] = []
+    for offset in 0..<7 {
+      let start = calendar.date(bySettingHour: 17, minute: 0, second: 0, of: day(offset + 1))!
+      if offset == 1 {
+        busy.append(DateInterval(start: start, duration: 15 * 60))
+        busy.append(DateInterval(start: start.addingTimeInterval(35 * 60), end: start.addingTimeInterval(60 * 60)))
+      } else { busy.append(DateInterval(start: start, duration: 60 * 60)) }
+    }
+    let result = TrainingPlanner.suggest(workouts: [], categories: [.endurance], busy: busy,
+      now: anchor, startHour: 17, endHour: 18, calendar: calendar)
+    XCTAssertEqual(result.count, 3)
+    let lessBusy = result.first { calendar.isDate($0.startDate, inSameDayAs: day(2)) }!
+    XCTAssertEqual(calendar.component(.minute, from: lessBusy.startDate), 15)
+    XCTAssertEqual(TrainingCalendar.overlappingSeconds(in: DateInterval(start: lessBusy.startDate, end: lessBusy.endDate), with: busy), 5 * 60)
+    for (index, entry) in result.enumerated() {
+      for other in result.dropFirst(index + 1) {
+        XCTAssertFalse(TrainingPlanner.overlaps(DateInterval(start: entry.startDate, end: entry.endDate),
+          DateInterval(start: other.startDate, end: other.endDate)))
+      }
+    }
+  }
+
+  func testAnOngoingLocalSessionIsNotIgnoredWhenScheduling() {
+    let ongoing = PlanEntry(activity: .running, startDate: now.addingTimeInterval(-1_800), durationMinutes: 180)
+    let result = TrainingPlanner.suggest(workouts: [], existing: [ongoing], categories: [.endurance],
+      now: now, calendar: calendar)
+    for entry in result {
+      XCTAssertFalse(TrainingPlanner.overlaps(DateInterval(start: entry.startDate, end: entry.endDate),
+        DateInterval(start: ongoing.startDate, end: ongoing.endDate)))
+    }
   }
 
   func testUpcomingMixStillIncludesSelectedCategoriesAfterEnduranceHeavyMonth() {

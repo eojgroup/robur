@@ -26,12 +26,17 @@ final class TrainingPlanOperationQueue {
 protocol TrainingPlanEventWorking {
   func requestAccess(reminders: Bool) async throws -> Bool
   func availability(now: Date, calendar: Calendar) async throws -> [DateInterval]
+  func calendarEvents(in interval: DateInterval) async throws -> [TrainingCalendarEvent]
   func refresh(entries: [PlanEntry], settings: TrainingPlanEventWorker.Settings) async throws -> TrainingPlanEventWorker.Snapshot
   func syncCalendarChanges(entries: [PlanEntry]) async throws -> [PlanEntry]
   func export(entries: [PlanEntry], settings: TrainingPlanEventWorker.Settings, ids: Set<UUID>?, allowReExport: Bool,
               progress: @escaping ([PlanEntry]) -> Void) async throws -> TrainingPlanEventWorker.ExportResult
   func remove(entry: PlanEntry, includeReminders: Bool) async throws
   func syncReminders(entries: [PlanEntry], settings: TrainingPlanEventWorker.Settings) async throws -> [PlanEntry]
+}
+
+extension TrainingPlanEventWorking {
+  func calendarEvents(in interval: DateInterval) async throws -> [TrainingCalendarEvent] { [] }
 }
 
 @MainActor
@@ -46,6 +51,10 @@ final class TrainingPlannerStore: ObservableObject {
   @Published private(set) var syncReminderCompletion = true
   @Published private(set) var calendarAccess = false
   @Published private(set) var reminderAccess = false
+  @Published private(set) var calendarEvents: [TrainingCalendarEvent] = []
+  @Published private(set) var calendarWindow: DateInterval?
+  @Published private(set) var calendarEventsLoading = false
+  @Published private(set) var calendarEventsError: String?
   // This describes external sync only. Local editing never takes this lock.
   @Published private(set) var isWorking = false
   @Published var lastError: String?
@@ -65,6 +74,7 @@ final class TrainingPlannerStore: ObservableObject {
   private var needsAnotherSync = false
   private var exportingIDs: Set<UUID> = []
   private var cachedBusy: [DateInterval] = []
+  private var requestedCalendarWindow: DateInterval?
 
   private struct Archive: Codable, Equatable {
     var version = 1
@@ -135,6 +145,53 @@ final class TrainingPlannerStore: ObservableObject {
     if commit(next) { scheduleSync() }
   }
 
+  /// Calendar context is an in-memory view, separate from the saved training plan.
+  /// Changing weeks discards the previous week's events immediately so an older
+  /// asynchronous response cannot paint the wrong dates or imply a clear calendar.
+  func loadCalendarEvents(in interval: DateInterval) async {
+    guard interval.start.timeIntervalSince1970.isFinite, interval.end.timeIntervalSince1970.isFinite,
+          interval.duration > 0, interval.duration <= 35 * 86_400 else {
+      requestedCalendarWindow = nil
+      calendarEvents = []; calendarWindow = nil
+      calendarEventsLoading = false
+      calendarEventsError = "Choose a Calendar range of up to 35 days."
+      return
+    }
+    if requestedCalendarWindow == interval && calendarEventsLoading { return }
+    requestedCalendarWindow = interval
+    if calendarWindow != interval { calendarEvents = []; calendarWindow = nil }
+    calendarEventsError = nil
+    guard !externalAccessDisabled else {
+      calendarEvents = []; calendarWindow = nil; calendarEventsLoading = false
+      calendarEventsError = "Connect Calendar to see existing events. Your local plan still works."
+      return
+    }
+    calendarEventsLoading = true
+    defer { if requestedCalendarWindow == interval { calendarEventsLoading = false } }
+    await performExternal { await self.refreshCalendarEvents(in: interval) }
+  }
+
+  /// Called inside the existing serial sync operation; never reacquires its lock.
+  private func refreshCalendarEvents(in interval: DateInterval) async {
+    guard requestedCalendarWindow == interval else { return }
+    calendarEventsLoading = true
+    defer { if requestedCalendarWindow == interval { calendarEventsLoading = false } }
+    do {
+      let events = try await worker.calendarEvents(in: interval)
+      guard requestedCalendarWindow == interval else { return }
+      calendarEvents = events.filter { $0.startDate < interval.end && $0.endDate > interval.start }
+        .sorted { $0.startDate == $1.startDate ? $0.id < $1.id : $0.startDate < $1.startDate }
+      calendarWindow = interval
+      calendarEventsError = nil
+      calendarAccess = true
+    } catch {
+      guard requestedCalendarWindow == interval else { return }
+      calendarEvents = []; calendarWindow = nil
+      if case PlannerError.calendarReadAccess = error { calendarAccess = false }
+      calendarEventsError = error is CancellationError ? "Calendar refresh stopped. Retry to check existing events." : error.localizedDescription
+    }
+  }
+
   @discardableResult
   func create(activity: WorkoutActivity, startDate: Date, durationMinutes: Int,
               muscles: Set<MuscleGroup> = [], state: PlanEntryState = .confirmed) -> UUID? {
@@ -202,7 +259,7 @@ final class TrainingPlannerStore: ObservableObject {
     })
     if commit(next) {
       status = generated.isEmpty ? "No new slots fit. Try a wider time window or review retained plans." :
-        (calendarAccess ? "\(generated.count) suggestions fitted around your Calendar. Review before adding sessions." :
+        (calendarAccess ? "\(generated.count) suggestions ready. Review their timing and any Calendar overlaps before adding sessions." :
           "\(generated.count) local suggestions. Connect Calendar to fit them around your existing events.")
       scheduleSync()
       return generated.count
@@ -277,6 +334,7 @@ final class TrainingPlannerStore: ObservableObject {
           self.status = "Session and its linked Calendar and Reminders items removed."
           self.actionMessage = self.status
         } else { self.actionMessage = self.lastError }
+        if let window = self.requestedCalendarWindow { await self.refreshCalendarEvents(in: window) }
       } catch { self.externalError(error); self.actionMessage = self.lastError }
     }
   }
@@ -335,9 +393,10 @@ final class TrainingPlannerStore: ObservableObject {
         guard self.lastError == nil else { self.actionMessage = self.lastError; return }
         if self.pendingSyncCount > 0 { self.needsAnotherSync = true }
         self.status = "Added \(result.inserted) Calendar placeholder\(result.inserted == 1 ? "" : "s")." +
-          (result.conflicting > 0 ? " \(result.conflicting) conflicted with Calendar; edit the time and try again." : "")
+          (result.conflicting > 0 ? " \(result.conflicting) session\(result.conflicting == 1 ? " overlaps" : "s overlap") existing Calendar events. Review the overlap in your plan." : "")
         self.actionMessage = result.inserted > 0 || result.conflicting > 0 ? self.status :
           "No Calendar event was added. This session may already be linked, completed, or in the past. Review its details and selected calendar."
+        if let window = self.requestedCalendarWindow { await self.refreshCalendarEvents(in: window) }
       } catch { self.externalError(error); self.actionMessage = self.lastError }
     }
   }
@@ -366,6 +425,7 @@ final class TrainingPlannerStore: ObservableObject {
           self.status = "Removed this session from Calendar and its linked reminders. Your local plan was kept."
           self.actionMessage = self.status
         } else { self.actionMessage = self.lastError }
+        if let window = self.requestedCalendarWindow { await self.refreshCalendarEvents(in: window) }
       } catch { self.externalError(error); self.actionMessage = self.lastError }
     }
   }
@@ -408,6 +468,7 @@ final class TrainingPlannerStore: ObservableObject {
           self.lastError = nil
           self.status = "Local plan saved. Calendar and Reminders are up to date where connected."
         }
+        if let window = self.requestedCalendarWindow { await self.refreshCalendarEvents(in: window) }
       } catch { self.externalError(error) }
     }
   }
@@ -532,11 +593,12 @@ final class TrainingPlannerStore: ObservableObject {
 }
 
 private enum PlannerError: LocalizedError {
-  case invalidArchive, calendarAccess, reminderAccess, readOnly, timeout, reminderFetch
+  case invalidArchive, calendarAccess, calendarReadAccess, reminderAccess, readOnly, timeout, reminderFetch
   var errorDescription: String? {
     switch self {
     case .invalidArchive: return "The saved plan could not be read and has been preserved."
     case .calendarAccess: return "Full Calendar access and a writable calendar are required."
+    case .calendarReadAccess: return "Full Calendar access is off. Connect Calendar to see existing events."
     case .reminderAccess: return "Enable Reminders access in Settings to remove this session's linked reminders."
     case .readOnly: return "This Calendar event is now read-only."
     case .timeout: return "Calendar or Reminders took too long to respond."
@@ -584,6 +646,24 @@ final class TrainingPlanEventWorker: TrainingPlanEventWorking, @unchecked Sendab
       guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { throw PlannerError.calendarAccess }
       let end = calendar.date(byAdding: .day, value: 7, to: now) ?? now
       return try self.busyIntervals(from: now, to: end, store: store, operation: operation)
+    }
+  }
+
+  func calendarEvents(in interval: DateInterval) async throws -> [TrainingCalendarEvent] {
+    try await perform { store, operation in
+      guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { throw PlannerError.calendarReadAccess }
+      var seen: Set<String> = []
+      return try self.events(from: interval.start, to: interval.end, store: store, operation: operation).compactMap { event in
+        guard event.status != .canceled, let start = event.startDate, let end = event.endDate,
+              start.timeIntervalSince1970.isFinite, end.timeIntervalSince1970.isFinite, end > start else { return nil }
+        let id = "\(event.eventIdentifier ?? event.calendarItemIdentifier)|\(start.timeIntervalSinceReferenceDate)"
+        guard seen.insert(id).inserted else { return nil }
+        let title = (event.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return TrainingCalendarEvent(id: id, title: title.isEmpty ? "Untitled event" : title,
+          calendarTitle: event.calendar.title, startDate: start, endDate: end,
+          isAllDay: event.isAllDay, blocksTime: event.availability != .free,
+          linkedPlanID: self.linkedPlanID(for: event))
+      }
     }
   }
 
@@ -706,6 +786,14 @@ final class TrainingPlanEventWorker: TrainingPlanEventWorking, @unchecked Sendab
         try operation.check()
         var entry = result.entries[index]
         let restoring = entry.calendarWasExported && entry.calendarEventID == nil && allowReExport
+        let conflict = try self.events(from: entry.startDate, to: entry.endDate, store: store, operation: operation).contains { event in
+          guard !self.owns(event, entry: entry), event.availability != .free, event.status != .canceled,
+                let start = event.startDate, let end = event.endDate, end > start else { return false }
+          return TrainingPlanner.overlaps(DateInterval(start: entry.startDate, end: entry.endDate), DateInterval(start: start, end: end))
+        }
+        // Adding is explicit user intent. A busy calendar is advisory, never a
+        // reason to discard the request or force another scheduling round.
+        if conflict { result.conflicting += 1 }
         if let found = try self.findEvent(for: entry, store: store, operation: operation) {
           entry.calendarEventID = found.eventIdentifier
           entry.calendarExternalID = found.calendarItemExternalIdentifier
@@ -715,12 +803,6 @@ final class TrainingPlanEventWorker: TrainingPlanEventWorking, @unchecked Sendab
           // An explicit add uses the currently reviewed local values.
           try self.update(event: found, entry: entry, store: store, operation: operation)
         } else {
-          let conflict = try self.events(from: entry.startDate, to: entry.endDate, store: store, operation: operation).contains { event in
-            guard event.availability != .free, event.status != .canceled,
-                  let start = event.startDate, let end = event.endDate, end > start else { return false }
-            return TrainingPlanner.overlaps(DateInterval(start: entry.startDate, end: entry.endDate), DateInterval(start: start, end: end))
-          }
-          if conflict { result.conflicting += 1; continue }
           let event = EKEvent(eventStore: store)
           event.calendar = calendar
           event.title = entry.calendarTitle
@@ -966,6 +1048,14 @@ final class TrainingPlanEventWorker: TrainingPlanEventWorking, @unchecked Sendab
 
   private func owns(_ item: EKCalendarItem, entry: PlanEntry) -> Bool {
     item.url == entry.url || (item.notes ?? "").components(separatedBy: .newlines).contains("Robur plan ID: \(entry.id.uuidString)")
+  }
+  private func linkedPlanID(for item: EKCalendarItem) -> UUID? {
+    if let url = item.url, url.scheme?.lowercased() == "robur", url.host?.lowercased() == "plan",
+       url.pathComponents.count == 2, let id = UUID(uuidString: url.lastPathComponent) { return id }
+    let marker = "Robur plan ID: "
+    return (item.notes ?? "").components(separatedBy: .newlines).compactMap { line in
+      line.hasPrefix(marker) ? UUID(uuidString: String(line.dropFirst(marker.count))) : nil
+    }.first
   }
   private func calendarUnavailable(for entry: PlanEntry, fallback: String? = nil, store: EKEventStore) -> Bool {
     guard let id = entry.calendarContainerID ?? fallback else { return false }
