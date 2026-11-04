@@ -312,6 +312,10 @@ jobs:
             OTHER_CODE_SIGN_FLAGS="--keychain $SIGNING_KEYCHAIN_PATH" \
             archive 2>&1 | tee "$RUNNER_TEMP/robur-archive.log"
 
+      - name: Verify archived iPhone and iPad compatibility
+        working-directory: apps/mobile/ios
+        run: ruby validate_xcodeproj.rb "$RUNNER_TEMP/Robur.xcarchive/Products/Applications/Robur.app/Info.plist"
+
       - name: Export signed IPA
         shell: bash
         run: |

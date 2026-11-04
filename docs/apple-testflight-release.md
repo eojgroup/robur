@@ -100,6 +100,22 @@ keychain and removes the keychain and credential files even after a failure.
 
 ## Release and verify
 
+### iPad availability
+
+Robur uses the same universal build and TestFlight invitation on iPhone and
+iPad (iOS/iPadOS 17 or later); there is no separate iPad App Store record.
+Version 1.6.1 removes the `healthkit` required-device capability, which Apple
+uses to restrict installation to iPhone even when the build targets iPad.
+HealthKit entitlements and permission prompts remain enabled. Both project
+validation and the archived-app check prevent this installation filter from
+returning. See [Apple's device capability reference](https://developer.apple.com/documentation/bundleresources/information-property-list/uirequireddevicecapabilities).
+
+On iPad, open TestFlight with the Apple Account used for the existing invitation
+and install the latest compatible Robur Health build. Older builds containing
+the device filter cannot be repaired after upload; install 1.6.1 or later.
+
+### Trigger a release
+
 After supplying credentials:
 
 ```bash
