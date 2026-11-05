@@ -55,7 +55,9 @@ jobs:
 
       - name: Validate generated project contracts
         working-directory: apps/mobile/ios
-        run: ruby validate_xcodeproj.rb
+        run: |
+          ruby validate_xcodeproj.rb
+          ruby Tests/ReleaseTests/universal_archive_test.rb
 
       - name: Compile universal iOS and iPadOS application
         working-directory: apps/mobile/ios
@@ -366,6 +368,7 @@ jobs:
             ${{ runner.temp }}/robur-export.log
             ${{ runner.temp }}/robur-upload.log
             ${{ runner.temp }}/Robur.xcarchive/Info.plist
+            ${{ runner.temp }}/Robur.xcarchive/Products/Applications/Robur.app/Info.plist
           if-no-files-found: warn
           retention-days: 14
 

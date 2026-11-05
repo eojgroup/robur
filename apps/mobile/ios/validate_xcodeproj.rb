@@ -88,7 +88,12 @@ end
 # CI passes the compiled app's Info.plist after archiving, so merged build
 # settings cannot silently reintroduce an iPhone-only distribution filter.
 if ARGV[0]
-  archived_plist = Xcodeproj::Plist.read_from_path(ARGV[0])
+  # Archives contain binary plists. xcodeproj's conflict scan treats their
+  # bytes as UTF-8 on some Ruby versions, so let Apple's tool decode them.
+  require "open3"
+  plist_json, plist_error, plist_status = Open3.capture3("/usr/bin/plutil", "-convert", "json", "-o", "-", ARGV[0])
+  abort "Cannot read archived app plist: #{plist_error}" unless plist_status.success?
+  archived_plist = JSON.parse(plist_json)
   validate_universal_capabilities(archived_plist, "Archived Robur app")
   abort "Archived app must support both iPhone and iPad" unless Array(archived_plist["UIDeviceFamily"]).sort == [1, 2]
   puts "Archived app supports iPhone and iPad without a HealthKit installation filter."
