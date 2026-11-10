@@ -35,7 +35,6 @@ targets:
       - sdk: WidgetKit.framework
       - sdk: HealthKit.framework
       - sdk: CoreLocation.framework
-      - sdk: MapKit.framework
       - sdk: CoreMotion.framework
       - sdk: EventKit.framework
       - sdk: AppIntents.framework

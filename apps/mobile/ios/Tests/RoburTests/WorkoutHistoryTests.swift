@@ -53,28 +53,54 @@ final class WorkoutHistoryTests: XCTestCase {
   }
 
   @MainActor
-  func testJournalRoundTripAndVisitSuggestion() async throws {
+  func testJournalRoundTripPreservesWorkoutReview() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let url = directory.appendingPathComponent("journal.json")
-    let journal = WorkoutJournal(url: url)
-    XCTAssertTrue(journal.addGym(name: "  My gym  ", latitude: 52, longitude: 13))
-    let gym = try XCTUnwrap(journal.gyms.first)
-    journal.checkIn(gym, now: date("2026-10-28T10:00:00Z"))
-    journal.checkOut(now: date("2026-10-28T12:00:00Z"))
+    let store = WorkoutReviewStore(url: directory.appendingPathComponent("reviews.json"))
+    let journal = WorkoutJournal(url: url, reviewStore: store)
     let session = workout("session", "2026-10-28T10:30:00Z")
-    XCTAssertEqual(journal.suggestedGym(for: session), gym.id)
-    XCTAssertNil(journal.suggestedGym(for: workout("other", "2026-10-27T10:30:00Z")))
-    let annotation = WorkoutAnnotation(muscles: [.back, .glutes], effort: 8, gymID: gym.id, notes: "Deadlifts")
+    let annotation = WorkoutAnnotation(muscles: [.back, .glutes], effort: 8, notes: "Deadlifts",
+      quickReview: WorkoutQuickReview(bodyFeeling: .loose))
     XCTAssertTrue(journal.save(annotation, for: session))
-    let reloaded = WorkoutJournal(url: url)
-    XCTAssertEqual(reloaded.annotations[session.id], annotation)
-    XCTAssertEqual(reloaded.gyms.first?.name, "My gym")
-    XCTAssertEqual(reloaded.visits.count, 1)
-    reloaded.deleteGym(gym)
-    XCTAssertNil(reloaded.annotations[session.id]?.gymID)
-    XCTAssertEqual(reloaded.annotations[session.id]?.effort, 8)
-    XCTAssertTrue(reloaded.visits.isEmpty)
+    XCTAssertEqual(WorkoutJournal(url: url, reviewStore: store).annotations[session.id], annotation)
+  }
+
+  @MainActor
+  func testLegacyLocationArchiveIsPurgedWithoutLosingReviewsOrSyncDates() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let url = directory.appendingPathComponent("journal.json")
+    let id = UUID().uuidString
+    let original = WorkoutAnnotation(muscles: [.back, .core], effort: 7, notes: "Keep this review",
+      quickReview: WorkoutQuickReview(pace: .steady, feltEffort: 6))
+    let annotationData = try JSONEncoder().encode(original)
+    var legacyAnnotation = try XCTUnwrap(JSONSerialization.jsonObject(with: annotationData) as? [String: Any])
+    legacyAnnotation["gymID"] = UUID().uuidString
+    let legacy: [String: Any] = [
+      "annotations": [id: legacyAnnotation],
+      "gyms": [["id": UUID().uuidString, "name": "Old gym", "latitude": 52, "longitude": 13]],
+      "visits": [["id": UUID().uuidString, "gymID": UUID().uuidString, "start": 100]],
+      "suppressedGyms": [UUID().uuidString],
+      "appliedReviewDates": [id: 12], "pendingReviewDates": [id: 34]
+    ]
+    try JSONSerialization.data(withJSONObject: legacy).write(to: url)
+    let store = WorkoutReviewStore(url: directory.appendingPathComponent("reviews.json"))
+    let journal = WorkoutJournal(url: url, reviewStore: store)
+    XCTAssertNil(journal.storageError)
+    XCTAssertEqual(journal.annotations[id], original)
+    let cleaned = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    XCTAssertNil(cleaned["gyms"])
+    XCTAssertNil(cleaned["visits"])
+    XCTAssertNil(cleaned["suppressedGyms"])
+    let savedAnnotations = try XCTUnwrap(cleaned["annotations"] as? [String: [String: Any]])
+    XCTAssertNil(savedAnnotations[id]?["gymID"])
+    XCTAssertEqual(cleaned["appliedReviewDates"] as? [String: Double], [id: 12])
+    XCTAssertEqual(cleaned["pendingReviewDates"] as? [String: Double], [id: 34])
+    let saved = try Data(contentsOf: url)
+    XCTAssertEqual(WorkoutJournal(url: url, reviewStore: store).annotations[id], original)
+    XCTAssertEqual(try Data(contentsOf: url), saved, "Migration should not rewrite an already-clean journal")
   }
 
   @MainActor
@@ -85,58 +111,26 @@ final class WorkoutHistoryTests: XCTestCase {
     try original.write(to: url)
     let journal = WorkoutJournal(url: url)
     XCTAssertNotNil(journal.storageError)
-    XCTAssertFalse(journal.addGym(name: "Do not overwrite"))
-    XCTAssertTrue(journal.gyms.isEmpty)
+    XCTAssertFalse(journal.save(WorkoutAnnotation(notes: "Do not overwrite"), for: workout("session", "2026-10-28T10:30:00Z")))
+    XCTAssertTrue(journal.annotations.isEmpty)
     XCTAssertEqual(try Data(contentsOf: url), original)
-  }
-  func testMonitoringPlanSkipsUnpositionedInvalidAndExcessGyms() {
-    var gyms = (0..<25).map { GymLocation(name: "Gym \($0)", latitude: 52, longitude: 13) }
-    gyms.insert(GymLocation(name: "No position"), at: 0)
-    gyms.insert(GymLocation(name: "Invalid", latitude: 100, longitude: 13), at: 1)
-    let selected = GymMonitoringPlan.locations(gyms)
-    XCTAssertEqual(selected.count, 20)
-    XCTAssertEqual(selected.first?.name, "Gym 0")
-    XCTAssertEqual(selected.last?.name, "Gym 19")
   }
 
   @MainActor
-  func testAutomaticEventsAreIdempotentAndManualCheckoutSuppressesUntilExit() async throws {
+  func testFailedSaveKeepsLoadedReview() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let url = directory.appendingPathComponent("journal.json")
-    let journal = WorkoutJournal(url: url)
-    XCTAssertTrue(journal.addGym(name: "Gym", latitude: 52, longitude: 13))
-    let gym = try XCTUnwrap(journal.gyms.first)
-    journal.automaticArrival(gymID: gym.id)
-    journal.automaticArrival(gymID: gym.id)
-    XCTAssertEqual(journal.visits.count, 1)
-    XCTAssertEqual(journal.activeVisit?.automatic, true)
-    journal.checkOut()
-    let reloaded = WorkoutJournal(url: url)
-    reloaded.automaticArrival(gymID: gym.id)
-    XCTAssertNil(reloaded.activeVisit)
-    reloaded.automaticDeparture(gymID: gym.id)
-    reloaded.automaticArrival(gymID: gym.id)
-    XCTAssertEqual(reloaded.visits.count, 2)
-    XCTAssertNotNil(reloaded.activeVisit)
-    reloaded.endAutomaticVisit()
-    XCTAssertNil(reloaded.activeVisit)
-  }
-
-  @MainActor
-  func testAutomaticEventsDoNotReplaceOrEndManualCheckIn() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let journal = WorkoutJournal(url: directory.appendingPathComponent("journal.json"))
-    XCTAssertTrue(journal.addGym(name: "Gym A"))
-    XCTAssertTrue(journal.addGym(name: "Gym B"))
-    let first = journal.gyms[0]
-    let second = journal.gyms[1]
-    journal.checkIn(first)
-    journal.automaticArrival(gymID: second.id)
-    journal.automaticDeparture(gymID: first.id)
-    XCTAssertEqual(journal.activeVisit?.gymID, first.id)
-    XCTAssertEqual(journal.visits.count, 1)
+    let store = WorkoutReviewStore(url: directory.appendingPathComponent("reviews.json"))
+    let journal = WorkoutJournal(url: url, reviewStore: store)
+    let session = workout("session", "2026-10-28T10:30:00Z")
+    let original = WorkoutAnnotation(muscles: [.back], effort: 8, notes: "Preserve")
+    XCTAssertTrue(journal.save(original, for: session))
+    try FileManager.default.removeItem(at: url)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+    XCTAssertFalse(journal.save(WorkoutAnnotation(notes: "Could not save"), for: session))
+    XCTAssertEqual(journal.annotations[session.id], original)
+    XCTAssertNotNil(journal.storageError)
   }
 
   @MainActor
@@ -146,7 +140,9 @@ final class WorkoutHistoryTests: XCTestCase {
     try Data(#"{"annotations":{},"gyms":[],"visits":[]}"#.utf8).write(to: url)
     let journal = WorkoutJournal(url: url)
     XCTAssertNil(journal.storageError)
-    XCTAssertTrue(journal.addGym(name: "Gym"))
+    XCTAssertTrue(journal.annotations.isEmpty)
+    let cleaned = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    XCTAssertNil(cleaned["gyms"])
+    XCTAssertNil(cleaned["visits"])
   }
-
 }

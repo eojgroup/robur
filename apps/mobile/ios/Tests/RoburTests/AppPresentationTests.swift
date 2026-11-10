@@ -37,12 +37,10 @@ final class AppPresentationTests: XCTestCase {
     let health = HealthKitClient(previewWorkouts: workouts, previewReadings: readings, defaults: defaults,
       previewDays: days, previewProfile: HealthProfile(age: 35, biologicalSex: "Male", bloodType: "A+", heightCm: 180, weightKg: 78, bodyFatPercent: 19, bmi: 24.1))
     let journal = WorkoutJournal(url: directory.appendingPathComponent("journal.json"))
-    XCTAssertTrue(journal.addGym(name: "Riverside Fitness"))
     for workout in workouts {
       XCTAssertTrue(journal.save(WorkoutAnnotation(muscles: [.back, .glutes], effort: 7,
-        gymID: journal.gyms.first?.id, notes: "Deadlift and row session"), for: workout))
+        notes: "Deadlift and row session"), for: workout))
     }
-    let monitor = GymMonitor(journal: journal, defaults: defaults)
     let calendarFixture = PlannerCalendarFixture()
     let planner = TrainingPlannerStore(url: directory.appendingPathComponent("plan.json"),
       observeChanges: false, worker: calendarFixture)
@@ -80,12 +78,10 @@ final class AppPresentationTests: XCTestCase {
     await planner.reconcile()
     await planner.loadCalendarEvents(in: Calendar.current.dateInterval(of: .weekOfYear, for: now)!)
     let screens: [(String, AnyView)] = [
-      ("today", AnyView(RoburTodayView())),
       ("workouts", AnyView(WorkoutHistoryView())),
-      ("progress", AnyView(FitnessHistoryView())),
+      ("overview", AnyView(FitnessHistoryView())),
       ("insights", AnyView(ScrollView { HealthOverviewView().frame(maxWidth: RoburStyle.contentWidth).padding().frame(maxWidth: .infinity) }
         .background(RoburStyle.background))),
-      ("places", AnyView(GymLocationsView())),
       ("plan", AnyView(TrainingPlannerView(store: planner))),
       ("plan-strength", AnyView(TrainingPlanEditor(entry: planner.entries[0], store: planner))),
       ("record", AnyView(WorkoutCaptureView())),
@@ -103,7 +99,7 @@ final class AppPresentationTests: XCTestCase {
     defer { originalWindow?.makeKeyAndVisible() }
     for (name, screen) in screens {
       for dark in [false, true] {
-        let controller = UIHostingController(rootView: screen.environmentObject(health).environmentObject(journal).environmentObject(monitor)
+        let controller = UIHostingController(rootView: screen.environmentObject(health).environmentObject(journal)
           .tint(RoburStyle.orange).foregroundStyle(RoburStyle.ink))
         let window = UIWindow(windowScene: scene)
         window.frame = scene.coordinateSpace.bounds

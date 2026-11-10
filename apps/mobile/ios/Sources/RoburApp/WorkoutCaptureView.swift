@@ -1,6 +1,8 @@
 import SwiftUI
+import UIKit
 
-struct WorkoutLaunchPanel: View {
+/// Review reminders follow the app rather than a dashboard card.
+struct WorkoutReviewPrompts: ViewModifier {
   @EnvironmentObject private var healthKit: HealthKitClient
   @EnvironmentObject private var journal: WorkoutJournal
   @Environment(\.scenePhase) private var scenePhase
@@ -8,64 +10,39 @@ struct WorkoutLaunchPanel: View {
   @StateObject private var reviews = WorkoutReviewStore.shared
   @StateObject private var motion = WorkoutMotionSuggestions.shared
   @State private var selected: WorkoutRecord?
+  @State private var suggestedActivity: WorkoutActivity?
+  @State private var showingMotionSuggestion = false
 
   private var pending: [WorkoutRecord] {
     WorkoutReviewPolicy.pending(workouts: healthKit.workouts, annotations: journal.annotations,
       reviewedIDs: Set(reviews.reviews.keys))
   }
 
-  var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      HStack {
-        Label("Workout", systemImage: "figure.run").font(.headline)
-        Spacer()
-        Button(recorder.isActive ? "Continue workout" : "Start workout") {
-          recorder.queueStart(activity: .functionalStrength)
-        }.buttonStyle(.borderedProminent)
+  func body(content: Content) -> some View {
+    content
+      .sheet(item: $selected) { workout in
+        WorkoutReviewEditor(workout: workout).onAppear { Self.markPrompted(workout.id) }
       }
-      if recorder.isActive {
-        TimelineView(.periodic(from: Date(), by: 1)) { context in
-          Text("\(recorder.activity.title) · \(recorder.phase.title) · \(Duration.seconds(recorder.elapsed(at: context.date)).formatted(.time(pattern: .hourMinuteSecond)))")
-            .font(.subheadline).monospacedDigit()
-        }
-      } else {
-        Text("Start a workout or review a recent session.")
-          .font(.subheadline).foregroundStyle(.secondary)
-      }
-      if let type = motion.suggestion, !recorder.isActive {
-        HStack {
-          VStack(alignment: .leading, spacing: 5) {
-            Text("Are you \(type == .running ? "running" : "cycling")?").font(.headline)
-            Text("Motion is a suggestion. Confirm before recording.").font(.caption).foregroundStyle(.secondary)
-          }
-          Spacer()
-          Button("Start") { motion.dismissSuggestion(); recorder.queueStart(activity: type) }
-          Button { motion.dismissSuggestion() } label: { Image(systemName: "xmark") }.accessibilityLabel("Dismiss motion suggestion")
-        }
-      }
-      if !pending.isEmpty {
-        Divider()
-        Label("\(pending.count) recent workouts to review", systemImage: "checklist").font(.subheadline.bold())
-        ForEach(Array(pending.prefix(3))) { workout in
-          Button { Self.markPrompted(workout.id); selected = workout } label: {
-            HStack {
-              Image(systemName: workout.symbol)
-              VStack(alignment: .leading) {
-                Text(workout.title)
-                Text(workout.start.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
-              }
-              Spacer()
-              Text(WorkoutReviewFields.caption(for: workout.activityType)).font(.caption)
-              Image(systemName: "chevron.right").font(.caption)
-            }
-          }.buttonStyle(.plain)
-        }
-      }
-    }.roburCard()
-      .sheet(item: $selected) { workout in WorkoutReviewEditor(workout: workout) }
       .onChange(of: healthKit.workouts, initial: true) { _, _ in remind(); promptReview() }
       .onChange(of: reviews.reviews) { _, _ in remind() }
       .onChange(of: scenePhase) { _, phase in if phase == .active { promptReview() } }
+      .onChange(of: recorder.presentationRequested) { _, showing in if !showing { promptReview() } }
+      .onChange(of: motion.suggestion) { _, activity in
+        if let activity, !hasPresentedScreen, !recorder.isActive, !recorder.presentationRequested, selected == nil {
+          suggestedActivity = activity
+          showingMotionSuggestion = true
+        }
+      }
+      .alert("Start a workout?", isPresented: $showingMotionSuggestion, presenting: suggestedActivity) { activity in
+          Button("Start") {
+            suggestedActivity = nil
+            motion.dismissSuggestion()
+            recorder.queueStart(activity: activity)
+          }
+          Button("Later", role: .cancel) { suggestedActivity = nil; motion.dismissSuggestion() }
+        } message: { activity in
+          Text("Motion suggests \(activity.title.lowercased()). Confirm to choose how to record it.")
+        }
   }
 
   private static let promptedKey = "RoburWorkoutReviewPromptedIDs"
@@ -79,11 +56,19 @@ struct WorkoutLaunchPanel: View {
 
   private func promptReview() {
     guard scenePhase == .active, selected == nil,
-          !recorder.presentationRequested, !recorder.isActive else { return }
+          !recorder.presentationRequested, !recorder.isActive, !showingMotionSuggestion, !hasPresentedScreen else { return }
     let prompted = Set(UserDefaults.standard.stringArray(forKey: Self.promptedKey) ?? [])
     guard let workout = pending.first(where: { $0.end >= Date().addingTimeInterval(-48 * 3600) && !prompted.contains($0.id) }) else { return }
-    Self.markPrompted(workout.id)
     selected = workout
+  }
+
+  private var hasPresentedScreen: Bool {
+    func isPresenting(_ controller: UIViewController?) -> Bool {
+      guard let controller else { return false }
+      return controller.presentedViewController != nil || controller.children.contains { isPresenting($0) }
+    }
+    return UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+      .flatMap(\.windows).filter(\.isKeyWindow).contains { isPresenting($0.rootViewController) }
   }
 
   private func remind() {
@@ -184,7 +169,7 @@ struct WorkoutCaptureView: View {
                     annotation.muscles = recorder.muscleGroups; annotation.notes = recorder.notes
                     _ = journal.save(annotation, for: workout)
                   }
-                  WorkoutLaunchPanel.markPrompted(workout.id)
+                  WorkoutReviewPrompts.markPrompted(workout.id)
                   reviewing = workout
                   await healthKit.refreshTodaySnapshot()
                   await HealthNotificationManager.shared.remindToReview(workout)

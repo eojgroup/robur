@@ -17,13 +17,12 @@ final class WorkoutReviewTests: XCTestCase {
   }
 
   @MainActor
-  func testPhoneJournalAppliesWatchReviewWithoutChangingEffortOrGymOrEchoing() async throws {
+  func testPhoneJournalAppliesWatchReviewWithoutChangingEffortOrEchoing() async throws {
     let url = temporaryURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     let store = WorkoutReviewStore(url: url.appendingPathExtension("reviews"))
     let journal = WorkoutJournal(url: url, reviewStore: store)
-    let gymID = UUID()
-    XCTAssertTrue(journal.save(WorkoutAnnotation(muscles: [.core], effort: 7, gymID: gymID, notes: "Phone"), for: workout()))
+    XCTAssertTrue(journal.save(WorkoutAnnotation(muscles: [.core], effort: 7, notes: "Phone"), for: workout()))
     let local = try XCTUnwrap(store.reviews[workoutID])
     store.markSynced(forID: workoutID, entry: local)
     var forwarded = 0
@@ -31,7 +30,7 @@ final class WorkoutReviewTests: XCTestCase {
     let watch = WorkoutReviewEntry(annotation: WorkoutAnnotation(muscles: [.back], notes: "Watch"), updatedAt: local.updatedAt.addingTimeInterval(1))
     XCTAssertTrue(store.mergeRemote(entry: watch, forID: workoutID))
     journal.synchronizeReviews()
-    XCTAssertEqual(journal.annotations[workoutID], WorkoutAnnotation(muscles: [.back], effort: 7, gymID: gymID, notes: "Watch"))
+    XCTAssertEqual(journal.annotations[workoutID], WorkoutAnnotation(muscles: [.back], effort: 7, notes: "Watch"))
     XCTAssertTrue(store.pendingReviewedIDs.isEmpty)
     XCTAssertEqual(forwarded, 0)
     let archive = try Data(contentsOf: url)
@@ -45,15 +44,15 @@ final class WorkoutReviewTests: XCTestCase {
   func testLegacyJournalSeedsOnlyNonemptyUUIDReviewsOnceWithoutQueuing() async throws {
     struct Legacy: Encodable {
       let annotations: [String: WorkoutAnnotation]
-      let gyms: [GymLocation] = []
-      let visits: [GymVisit] = []
+      let gyms: [String] = []
+      let visits: [String] = []
     }
     let url = temporaryURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
     let emptyID = UUID().uuidString
     try JSONEncoder().encode(Legacy(annotations: [
-      workoutID: WorkoutAnnotation(muscles: [.quads], effort: 8, gymID: UUID(), notes: "Legacy"),
+      workoutID: WorkoutAnnotation(muscles: [.quads], effort: 8, notes: "Legacy"),
       emptyID: WorkoutAnnotation(effort: 5), "not-a-uuid": WorkoutAnnotation(notes: "Local fixture")
     ])).write(to: url)
     let store = WorkoutReviewStore(url: url.appendingPathExtension("reviews"))
@@ -178,16 +177,14 @@ final class WorkoutReviewTests: XCTestCase {
     let store = WorkoutReviewStore(url: url)
     var callbacks = 0
     store.onLocalChange = { _, _ in callbacks += 1 }
-    let annotation = WorkoutAnnotation(muscles: [.core], effort: 7, gymID: UUID(), notes: "Planks")
+    let annotation = WorkoutAnnotation(muscles: [.core], effort: 7, notes: "Planks")
     XCTAssertTrue(store.save(annotation: annotation, forID: workoutID, updatedAt: date))
     let entry = try XCTUnwrap(store.reviews[workoutID])
     XCTAssertNil(entry.annotation.effort)
-    XCTAssertNil(entry.annotation.gymID)
     store.markSynced(forID: workoutID, entry: entry)
     let archive = try Data(contentsOf: url)
     var changedPhoneFields = annotation
     changedPhoneFields.effort = 3
-    changedPhoneFields.gymID = UUID()
     XCTAssertTrue(store.save(annotation: changedPhoneFields, forID: workoutID, updatedAt: date.addingTimeInterval(20)))
     XCTAssertEqual(store.reviews[workoutID], entry)
     XCTAssertTrue(store.pendingReviewedIDs.isEmpty)
@@ -224,7 +221,7 @@ final class WorkoutReviewTests: XCTestCase {
     XCTAssertThrowsError(try WorkoutReviewRules.decode(Data(repeating: 0, count: WorkoutReviewRules.maximumPayloadBytes + 1)))
     XCTAssertThrowsError(try WorkoutReviewRules.decode(JSONEncoder().encode(WorkoutReviewPayload(version: 2, workoutID: workoutID, entry: entry))))
     XCTAssertThrowsError(try WorkoutReviewRules.decode(JSONEncoder().encode(WorkoutReviewPayload(version: 1, workoutID: "arbitrary", entry: entry))))
-    let privateEntry = WorkoutReviewEntry(annotation: WorkoutAnnotation(effort: 7, gymID: UUID()), updatedAt: date)
+    let privateEntry = WorkoutReviewEntry(annotation: WorkoutAnnotation(effort: 7), updatedAt: date)
     XCTAssertThrowsError(try WorkoutReviewRules.encode(workoutID: workoutID, entry: privateEntry))
     let oversized = WorkoutReviewEntry(annotation: WorkoutAnnotation(notes: String(repeating: "a", count: 2_001)), updatedAt: date)
     XCTAssertThrowsError(try WorkoutReviewRules.encode(workoutID: workoutID, entry: oversized))

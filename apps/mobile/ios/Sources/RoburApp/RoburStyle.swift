@@ -72,26 +72,32 @@ struct RoburRootView: View {
   @State private var selectedTab = 0
   var body: some View {
     TabView(selection: $selectedTab) {
-      RoburTodayView().tabItem { Label("Today", systemImage: "sun.max") }.tag(0)
-      WorkoutHistoryView().tabItem { Label("Workouts", systemImage: "figure.strengthtraining.traditional") }.tag(1)
-      FitnessHistoryView().tabItem { Label("Progress", systemImage: "chart.xyaxis.line") }.tag(2)
-      TrainingPlannerView().tabItem { Label("Plan", systemImage: "calendar") }.tag(3)
-      GymLocationsView().tabItem { Label("Places", systemImage: "mappin.and.ellipse") }.tag(4)
+      FitnessHistoryView().tabItem { Label("Overview", systemImage: "chart.xyaxis.line") }.tag(0)
+      TrainingPlannerView().tabItem { Label("Training", systemImage: "calendar") }.tag(1)
     }
     .tint(RoburStyle.orange)
     .foregroundStyle(RoburStyle.ink)
     .preferredColorScheme(appearance == "dark" ? .dark : (appearance == "light" ? .light : nil))
     .sheet(isPresented: $recorder.presentationRequested) { WorkoutCaptureView() }
+    .modifier(WorkoutReviewPrompts())
     .task {
+      LegacyLocationCleanup.run()
       WorkoutReviewSync.shared.activate()
       journal.synchronizeReviews()
       WorkoutMotionSuggestions.shared.setForeground(scenePhase == .active)
     }
     .onChange(of: reviews.reviews) { _, _ in journal.synchronizeReviews() }
+    .onChange(of: healthKit.dailyMetrics) { _, days in
+      let defaults = UserDefaults.standard
+      let summary = TrainingInsights.make(days: days, workouts: healthKit.workouts,
+        annotations: journal.annotations, maxHR: defaults.object(forKey: "RoburMaxHeartRate") as? Double ?? 190)
+      Task { await HealthNotificationManager.shared.evaluate(summary: summary, days: days,
+        stepsGoal: defaults.object(forKey: "RoburStepsGoal") as? Double ?? 8000) }
+    }
     .onOpenURL { url in
-      if url.host == "today" { selectedTab = 0 }
-      else if url.host == "progress" { selectedTab = 2 }
-      else if TrainingPlannerStore.shared.open(url: url) { selectedTab = 3 }
+      if url.host == "today" || url.host == "progress" { selectedTab = 0 }
+      else if url.host == "workouts" { selectedTab = 1 }
+      else if TrainingPlannerStore.shared.open(url: url) { selectedTab = 1 }
     }
     .onChange(of: scenePhase) { _, phase in
       WorkoutMotionSuggestions.shared.setForeground(phase == .active)

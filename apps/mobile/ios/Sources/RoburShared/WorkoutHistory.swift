@@ -113,24 +113,8 @@ enum FitnessMetric: String, CaseIterable, Identifiable {
 struct WorkoutAnnotation: Codable, Equatable {
   var muscles: Set<MuscleGroup> = []
   var effort: Int? = nil
-  var gymID: UUID? = nil
   var notes = ""
   var quickReview: WorkoutQuickReview? = nil
-}
-
-struct GymLocation: Codable, Identifiable, Equatable {
-  var id = UUID()
-  var name: String
-  var latitude: Double?
-  var longitude: Double?
-}
-
-struct GymVisit: Codable, Identifiable, Equatable {
-  var id = UUID()
-  let gymID: UUID
-  let start: Date
-  var end: Date?
-  var automatic: Bool? = nil
 }
 
 struct HistoryBucket: Identifiable, Equatable {
@@ -176,16 +160,6 @@ enum WorkoutAnalytics {
     return grouped.map { date, samples in
       TrendPoint(date: date, value: samples.reduce(0) { $0 + $1.value } / Double(samples.count))
     }.sorted { $0.date < $1.date }
-  }
-}
-
-// Region monitoring supports at most 20 saved places per app. Preserve save order.
-enum GymMonitoringPlan {
-  static func locations(_ gyms: [GymLocation]) -> [GymLocation] {
-    Array(gyms.filter { gym in
-      guard let lat = gym.latitude, let lon = gym.longitude else { return false }
-      return lat.isFinite && lon.isFinite && (-90...90).contains(lat) && (-180...180).contains(lon)
-    }.prefix(20))
   }
 }
 

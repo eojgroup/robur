@@ -22,7 +22,7 @@ enum WorkoutReviewRules {
     guard annotation.notes.count <= maximumNotes, annotation.notes.utf8.count <= 8_000,
           annotation.muscles.count <= MuscleGroup.allCases.count,
           annotation.quickReview?.isValid != false else { return nil }
-    // Gym identity and personal effort remain phone-local; only the review is synced.
+    // Personal effort remains phone-local; only the review is synced.
     return WorkoutAnnotation(muscles: annotation.muscles, notes: annotation.notes, quickReview: annotation.quickReview?.isEmpty == false ? annotation.quickReview : nil)
   }
 

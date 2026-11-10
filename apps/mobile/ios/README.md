@@ -119,48 +119,35 @@ releases do not collide with build `1`. The current local-only application has
 no custom cryptography, so both app targets declare exempt encryption; revisit
 that declaration before adding non-exempt encryption.
 
-## Workout journal and progress
+## Overview and training 1.7
 
-The iPhone/iPad app has Today, Workouts, Progress and Places tabs. Workouts
-imports Apple Health workouts and supports local muscle tags, perceived effort
-(1–10), notes and a saved gym. Session load is minutes × self-rated effort in
-arbitrary units; unrated workouts are excluded from effort charts. These details
-are not written to HealthKit and do not sync to the Watch or other devices.
+The universal iPhone/iPad app has two tabs:
 
-Progress offers 30 days, 90 days, one year and all available Health history.
-There is no app-imposed date cutoff or sample count limit for All history;
-Apple Health permissions and device availability still determine coverage.
-VO₂ max, resting HR and HRV use weekly means (monthly for year/all-history),
-while workout minutes and effort load use totals. Select either chart to inspect
-workouts from the same period. Muscle charts count tagged sessions per group.
-Missing Health readings are not replaced with estimated fitness values.
+- **Overview** combines the former Home and Progress screens. A large history
+  graph leads the screen; choose Training, Recovery or Health and the measure
+  to display instead of scrolling through separate charts. iPad uses the
+  available width for related charts. Current readiness, fitness, load and sleep
+  stay compact; detailed insights, records and body metrics are available on demand.
+- **Training** combines plans and recorded Health workouts. Compact weekly rows
+  and a visual summary compare scheduled and performed training. Calendar and
+  training-mix views are options within Training. Existing session editing,
+  Calendar/Reminders sync, recording and quick reviews remain available.
 
-Places saves names with optional coordinates, offers foreground matching within
-200 m, and supports both manual check-ins and opt-in automatic background gym
-visits. Automatic detection uses Core Location circular-region entry/exit events
-with Always authorization, Precise Location and Background App Refresh. At most
-20 saved positions are monitored, in save order, with the limit visible in the
-UI. It does not start continuous GPS tracking or create Health workouts from
-presence. The application delegate restores the location delegate on background
-launch. iOS can delay region events or stop delivery after force-quit; manual
-check-in remains available. Detected visits are labeled approximate and can be
-deleted. Duplicate events are idempotent; automatic exits cannot close a manual
-visit. A manual checkout suppresses repeat arrival until a region exit.
+History supports 30 days, 90 days, one year and all available Health records.
+Apple Health permissions and device availability determine coverage; missing
+readings remain empty. Personal workout reviews sync with the paired Watch.
+Apple effort is preferred for the separate 7/28-day load comparison.
 
-Positions older than two minutes or less accurate than 100 m are not used for
-foreground suggestions. An overlapping visit suggests a gym in the workout
-editor for the user to confirm. Notes, places and visits are written atomically
-with iOS complete protection until first user authentication, so background
-region events can be saved while locked after the first unlock. An unreadable
-existing journal is preserved.
+Places, saved gyms, check-ins and background location tracking have been removed.
+Upgrades unregister previously monitored gym regions without requesting location
+access. Legacy journal data is rewritten without places or coordinates while
+preserving workout notes, muscle tags, effort and quick reviews. An unreadable
+journal is preserved rather than overwritten. Widgets continue providing timely
+health and recovery summaries outside the app.
 
-Existing users should tap **Access** on Today or **Manage Health access** in
-Workouts/Progress to authorize newly supported data categories. For existing
-permission changes, use the Health app. Real-device validation must include old
-history, partial permissions, empty VO₂ max history, location denial, inaccurate
-positions, background arrivals/departures while locked, permission downgrade, disabling detection, overlapping gym visits, saved tags after relaunch, light/dark mode,
-VoiceOver, and large text. Location and actual Health readings cannot be fully
-verified in a simulator.
+Device validation should include old history, partial Health permissions, saved
+reviews after upgrading, phone/tablet layouts, light/dark mode, VoiceOver and
+large text. Health access and live recording still require real-device checks.
 
 ## Health insights 1.1
 
@@ -192,7 +179,7 @@ setup for confirmation. Existing Apple Fitness effort ratings remain unchanged.
 Saved and recent imported workouts offer muscle-group and notes reviews. Reviews
 are durable, and tags/notes sync through WatchConnectivity between paired iPhone
 and Watch with receipt acknowledgement. Health workout samples are immutable after
-saving; Robur stores later edits in its own journal, preserving effort and gym
+saving; Robur stores later edits in its own journal, preserving effort and workout
 annotations. Optional review notifications use generic text and are evaluated
 when Health refreshes. The Watch also shows recent workouts awaiting review.
 
@@ -308,7 +295,7 @@ gaps and an all-day busy event. Verify week navigation, large text, light/dark m
 and narrow iPad windows. Automated fixtures cover state transitions, old archives,
 conflicts, buffers, DST and muscle/category rotation; account sync needs a device.
 
-### Calendar actions and remote places 1.5.1
+### Calendar actions 1.5.1
 
 Calendar actions queue behind an active refresh and show their result immediately.
 Sync progress and errors appear above the weekly overview. The training-time search
@@ -323,17 +310,10 @@ or reopened and removes associated reminders, including owned duplicates and ite
 moved to another list. Permission or provider failures keep cleanup retryable; the
 app never matches unrelated reminders by title.
 
-Places supports Apple Maps search by gym name, city or address without requesting
-the current device location. Select a result, inspect its pin/address, and save.
-Existing places can also receive a searched position. Current-position and name-only
-entry remain available. Searches use Apple Maps over the network; stored places
-remain local. Cancellation, edited queries and timeouts invalidate stale results.
-
 Device checks: tap Add while a refresh runs; check the named destination calendar
 and visible result; delete the event externally and return to Robur; remove a session
-in-app and check its reminders; retry offline cleanup without duplicates. Search a
-gym in another city with Location denied, select its pin, and save. Calendar account
-sync and live search results still require device/network validation.
+in-app and check its reminders; retry offline cleanup without duplicates. Calendar
+account sync still requires device/network validation.
 
 ## Flexible Calendar planning 1.6
 

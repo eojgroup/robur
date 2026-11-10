@@ -6,18 +6,16 @@ struct WorkoutHistoryView: View {
   @EnvironmentObject private var journal: WorkoutJournal
   @State private var search = ""
   @State private var muscle: MuscleGroup?
-  @State private var gymID: UUID?
   @State private var selected: WorkoutRecord?
   @State private var contentWidth: CGFloat = 360
 
   private var filtered: [WorkoutRecord] {
     healthKit.workouts.filter { workout in
       let annotation = journal.annotations[workout.id] ?? WorkoutAnnotation()
-      let text = [workout.title, annotation.notes, journal.gymName(annotation.gymID) ?? "",
+      let text = [workout.title, annotation.notes,
                   annotation.muscles.map(\.rawValue).joined(separator: " ")].joined(separator: " ")
       return (search.isEmpty || text.localizedCaseInsensitiveContains(search)) &&
-        (muscle == nil || annotation.muscles.contains(muscle!)) &&
-        (gymID == nil || annotation.gymID == gymID)
+        (muscle == nil || annotation.muscles.contains(muscle!))
     }
   }
 
@@ -25,11 +23,6 @@ struct WorkoutHistoryView: View {
     NavigationStack {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 16) {
-          VStack(alignment: .leading, spacing: 6) {
-            Text("MAKE EVERY SESSION COUNT").font(.caption.weight(.bold)).foregroundStyle(RoburStyle.teal)
-            Text("Your training journal").font(.largeTitle.bold())
-            Text("Add what you trained, how it felt, and where you showed up.").foregroundStyle(.secondary)
-          }
           HistoryRangePicker()
           if let error = healthKit.effortImportError {
             Text(error).font(.caption).foregroundStyle(.secondary)
@@ -42,11 +35,6 @@ struct WorkoutHistoryView: View {
               Button("All muscles") { muscle = nil }
               ForEach(MuscleGroup.allCases) { group in Button(group.rawValue) { muscle = group } }
             } label: { Label(muscle?.rawValue ?? "All muscles", systemImage: "line.3.horizontal.decrease.circle") }
-            Spacer()
-            Menu {
-              Button("All places") { gymID = nil }
-              ForEach(journal.gyms) { gym in Button(gym.name) { gymID = gym.id } }
-            } label: { Label(journal.gymName(gymID) ?? "All places", systemImage: "mappin") }
           }.font(.subheadline)
           Text("\(filtered.count) workouts · \(Int(filtered.reduce(0) { $0 + $1.minutes })) min")
             .font(.headline).monospacedDigit()
@@ -58,8 +46,7 @@ struct WorkoutHistoryView: View {
             count: AdaptiveCardLayout.columnCount(for: contentWidth)), spacing: 16) {
             ForEach(filtered) { workout in
               Button { selected = workout } label: {
-                WorkoutRow(workout: workout, annotation: journal.annotations[workout.id] ?? WorkoutAnnotation(),
-                           gymName: journal.gymName(journal.annotations[workout.id]?.gymID))
+                WorkoutRow(workout: workout, annotation: journal.annotations[workout.id] ?? WorkoutAnnotation())
               }.buttonStyle(.plain)
             }
           }
@@ -73,12 +60,9 @@ struct WorkoutHistoryView: View {
       }
       .background(RoburStyle.background)
       .navigationTitle("Workouts").navigationBarTitleDisplayMode(.inline)
-      .searchable(text: $search, prompt: "Workout, muscle, place or notes")
+      .searchable(text: $search, prompt: "Workout, muscle or notes")
       .refreshable { await healthKit.loadHistory(range: healthKit.historyRange) }
       .sheet(item: $selected) { WorkoutDetailView(workout: $0) }
-      .onChange(of: journal.gyms) { _, gyms in
-        if let gymID, !gyms.contains(where: { $0.id == gymID }) { self.gymID = nil }
-      }
     }
   }
 }
@@ -86,12 +70,11 @@ struct WorkoutHistoryView: View {
 struct WorkoutRow: View {
   let workout: WorkoutRecord
   let annotation: WorkoutAnnotation
-  let gymName: String?
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      HStack(alignment: .top, spacing: 14) {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(alignment: .top, spacing: 10) {
         Image(systemName: workout.symbol).font(.title2).foregroundStyle(RoburStyle.teal)
-          .frame(width: 48, height: 48).background(RoburStyle.teal.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+          .frame(width: 32, height: 32).background(RoburStyle.teal.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
         VStack(alignment: .leading, spacing: 4) {
           Text(workout.title).font(.headline)
           Text(workout.start.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
@@ -100,15 +83,15 @@ struct WorkoutRow: View {
         Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
       }
       ViewThatFits(in: .horizontal) {
-        HStack(spacing: 16) { metrics }
-        VStack(alignment: .leading, spacing: 6) { metrics }
-      }
+        HStack(spacing: 12) { metrics }
+        VStack(alignment: .leading, spacing: 4) { metrics }
+      }.font(.caption)
       if !annotation.muscles.isEmpty {
         Text(annotation.muscles.map(\.rawValue).sorted().joined(separator: " · "))
           .font(.caption.weight(.medium)).foregroundStyle(RoburStyle.teal)
       }
-      if let gymName { Label(gymName, systemImage: "mappin.and.ellipse").font(.caption).foregroundStyle(.secondary) }
-    }.roburCard()
+    }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+      .background(RoburStyle.surface, in: RoundedRectangle(cornerRadius: 16))
     .accessibilityElement(children: .combine)
   }
   @ViewBuilder private var metrics: some View {
@@ -163,7 +146,7 @@ struct WorkoutDetailView: View {
           WorkoutReviewFields(workout: current, muscles: $draft.muscles,
             quick: Binding(get: { draft.quickReview ?? WorkoutQuickReview() }, set: { draft.quickReview = $0.isEmpty ? nil : $0 }))
         }
-        placeSection
+        notesSection
         Section {
           Text("Notes and muscle tags are saved in Robur and sync between your paired iPhone and Watch. Apple Fitness effort is imported from Health; editing a review preserves the original Health workout.")
             .font(.footnote).foregroundStyle(.secondary)
@@ -179,7 +162,7 @@ struct WorkoutDetailView: View {
       }
       .onAppear {
         guard !loaded else { return }
-        draft = journal.annotations[workout.id] ?? WorkoutAnnotation(gymID: journal.suggestedGym(for: workout))
+        draft = journal.annotations[workout.id] ?? WorkoutAnnotation()
         loaded = true
       }
       .task(id: workout.id) {
@@ -291,12 +274,8 @@ struct WorkoutDetailView: View {
     }
   }
 
-  private var placeSection: some View {
-    Section("Place & notes") {
-      Picker("Fitness centre", selection: $draft.gymID) {
-        Text("No place").tag(UUID?.none)
-        ForEach(journal.gyms) { gym in Text(gym.name).tag(Optional(gym.id)) }
-      }
+  private var notesSection: some View {
+    Section("Notes") {
       TextField("Exercises, sets, progress, how you felt…", text: Binding(get: { draft.notes }, set: { value in
         if value.count <= WorkoutReviewRules.maximumNotes || value.count < draft.notes.count { draft.notes = value }
       }), axis: .vertical).lineLimit(3...8)

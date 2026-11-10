@@ -1,6 +1,15 @@
 import Charts
 import SwiftUI
 
+private enum TrainingOverviewMode: String, CaseIterable, Identifiable {
+  case sessions = "Sessions", calendar = "Calendar", mix = "Mix"
+  var id: String { rawValue }
+}
+private enum TrainingSessionFilter: String, CaseIterable, Identifiable {
+  case all = "All", planned = "Planned", performed = "Performed"
+  var id: String { rawValue }
+}
+
 @MainActor
 struct TrainingPlannerView: View {
   @StateObject private var store: TrainingPlannerStore
@@ -19,7 +28,12 @@ struct TrainingPlannerView: View {
   @State private var addingCalendarIDs: Set<UUID> = []
   @State private var resultMessage: String?
   @State private var offerExtraSession = false
-  @State private var calendarOverview = true
+  @State private var overviewMode: TrainingOverviewMode = .sessions
+  @State private var sessionFilter: TrainingSessionFilter = .all
+  @State private var selectedWorkout: WorkoutRecord?
+  @State private var search = ""
+  @State private var choosingWeek = false
+  @State private var jumpDate = Date()
 
   init(store: TrainingPlannerStore? = nil) {
     _store = StateObject(wrappedValue: store ?? .shared)
@@ -38,10 +52,24 @@ struct TrainingPlannerView: View {
   private var weekEntries: [PlanEntry] {
     store.entries.filter { $0.startDate >= week.start && $0.startDate < week.end }.sorted { $0.startDate < $1.startDate }
   }
-  private var visible: [PlanEntry] {
-    guard let selectedDay else { return weekEntries }
-    guard let day = Calendar.current.dateInterval(of: .day, for: selectedDay) else { return [] }
-    return store.entries.filter { $0.startDate < day.end && $0.endDate > day.start }.sorted { $0.startDate < $1.startDate }
+  private var weekWorkouts: [WorkoutRecord] {
+    healthKit.workouts.filter { $0.start >= week.start && $0.start < week.end }.sorted { $0.start < $1.start }
+  }
+  private var comparisons: [TrainingSessionComparison] {
+    TrainingSessionOverview.compare(plans: weekEntries, workouts: weekWorkouts)
+  }
+  private var visibleSessions: [TrainingSessionComparison] {
+    comparisons.filter { session in
+      if let selectedDay, !Calendar.current.isDate(session.date, inSameDayAs: selectedDay) { return false }
+      if sessionFilter == .planned && session.plan == nil { return false }
+      if sessionFilter == .performed && session.workout == nil { return false }
+      guard !search.isEmpty else { return true }
+      let workout = session.workout
+      let annotation = workout.flatMap { journal.annotations[$0.id] }
+      let text = [session.plan?.activity.title, session.plan?.muscleSummary, workout?.title,
+        annotation?.notes, annotation?.muscles.map(\.rawValue).joined(separator: " ")].compactMap { $0 }.joined(separator: " ")
+      return text.localizedCaseInsensitiveContains(search)
+    }
   }
   private var coveredMuscles: Set<MuscleGroup> {
     Set(weekEntries.filter { $0.activity.category == .strength }.flatMap { $0.muscles })
@@ -50,48 +78,42 @@ struct TrainingPlannerView: View {
   var body: some View {
     NavigationStack {
       ScrollView {
-        VStack(alignment: .leading, spacing: 20) {
-          ViewThatFits(in: .horizontal) {
-            HStack {
-              planHeading.fixedSize(horizontal: true, vertical: false)
-              Spacer()
-              newSessionButton
-            }
-            VStack(alignment: .leading, spacing: 12) { planHeading; newSessionButton }
-          }
+        VStack(alignment: .leading, spacing: 14) {
+          weekNavigation
           syncStatus
-          Picker("Overview", selection: $calendarOverview) {
-            Text("Calendar & sessions").tag(true)
-            Text("Training overview").tag(false)
+          Picker("Training view", selection: $overviewMode) {
+            ForEach(TrainingOverviewMode.allCases) { mode in Text(mode.rawValue).tag(mode) }
           }.pickerStyle(.segmented)
-          if calendarOverview {
-            weekNavigation
+          if overviewMode == .calendar {
             TrainingCalendarView(week: week, events: store.calendarEvents, entries: store.entries,
               isLoading: store.calendarEventsLoading, error: store.calendarEventsError,
               calendarAccess: store.calendarAccess, onEdit: { store.focusedEntryID = $0 },
               onConnect: {
                 Task { await store.requestCalendarAccess(); await store.loadCalendarEvents(in: week) }
               }, selection: $selectedDay)
-          } else { overviewCard }
-          Button(generating ? "Finding training time…" : "Suggest training sessions", systemImage: "sparkles") { generatePlan() }
-            .buttonStyle(.borderedProminent).disabled(categories.isEmpty || generating)
-            .accessibilityIdentifier("generate-training-plan")
-          if generating { ProgressView("Checking your calendars…") }
-          AdaptiveCardLayout {
-            trainingMixCard
-            muscleCoverageCard
+          } else if overviewMode == .mix {
+            AdaptiveCardLayout { trainingMixCard; muscleCoverageCard }
+          } else {
+            overviewCard
           }
-          HStack {
-            Text(selectedDay.map { $0.formatted(.dateTime.weekday(.wide).day().month()) } ?? "Sessions this week")
-              .font(.title2.bold())
-            Spacer()
-            if selectedDay != nil { Button("Show week") { selectedDay = nil } }
+          sessionsSection
+          if !healthKit.authorizationRequested {
+            Button("Connect Apple Health", systemImage: "heart.text.square") { healthKit.requestAuthorization() }
+              .buttonStyle(.bordered)
           }
-          if visible.isEmpty {
-            ContentUnavailableView("Space for a session", systemImage: "calendar.badge.plus",
-              description: Text("Add a session or find free training time."))
+          if let historyStart = healthKit.historyRange.startDate(), week.end < historyStart {
+            Button("Read all workout history", systemImage: "clock.arrow.circlepath") {
+              Task { await healthKit.loadHistory(range: .all) }
+            }.disabled(healthKit.isLoadingHistory)
+            Text("This week is outside the currently loaded Health history.").font(.caption).foregroundStyle(.secondary)
           }
-          AdaptiveCardLayout { ForEach(visible) { entry in entryCard(entry) } }
+          if healthKit.isLoadingHistory { ProgressView("Reading workout history…").font(.caption) }
+          if let historyError = healthKit.historyError { Text(historyError).font(.caption).foregroundStyle(.red) }
+          if let effortError = healthKit.effortImportError { Text(effortError).font(.caption).foregroundStyle(.secondary) }
+          DisclosureGroup {
+            Text("Nearby plan comparisons use the same activity and local day, starts within 3 hours, and durations between half and twice the plan. They are approximate and never mark a plan completed. A plan checked off in Robur or Reminders is separate from a workout recorded in Apple Health.")
+              .font(.caption).foregroundStyle(.secondary)
+          } label: { Text("How plan comparisons work").font(.caption) }
           DisclosureGroup {
             AdaptiveCardLayout { preferencesCard; calendarCard }
           } label: {
@@ -102,7 +124,36 @@ struct TrainingPlannerView: View {
         .frame(maxWidth: RoburStyle.contentWidth).padding().frame(maxWidth: .infinity)
       }
       .background(RoburStyle.background)
-      .navigationTitle("Plan").navigationBarTitleDisplayMode(.inline)
+      .navigationTitle("Training").navigationBarTitleDisplayMode(.inline)
+      .searchable(text: $search, prompt: "Activity, muscle or notes")
+      .toolbar {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+          Button { PhoneWorkoutRecorder.shared.presentationRequested = true } label: { Image(systemName: "play.circle") }
+            .accessibilityLabel("Start or continue a workout")
+          Menu {
+            Button("New session", systemImage: "plus") { createSession() }
+            Button("Suggest sessions", systemImage: "sparkles") { generatePlan() }.disabled(categories.isEmpty || generating)
+            Button("Choose week", systemImage: "calendar") { jumpDate = week.start; choosingWeek = true }
+            NavigationLink { WorkoutHistoryView() } label: { Label("Workout history", systemImage: "clock.arrow.circlepath") }
+          } label: { Image(systemName: "plus") }.accessibilityLabel("Training actions")
+        }
+      }
+      .refreshable { await store.reconcile(); await healthKit.loadHistory(range: healthKit.historyRange) }
+      .sheet(item: $selectedWorkout) { WorkoutDetailView(workout: $0) }
+      .sheet(isPresented: $choosingWeek) {
+        NavigationStack {
+          DatePicker("Training week", selection: $jumpDate, displayedComponents: .date).datePickerStyle(.graphical).padding()
+            .navigationTitle("Choose week")
+            .toolbar {
+              Button("Show week") {
+                let current = Calendar.current.dateInterval(of: .weekOfYear, for: Date())?.start ?? Date()
+                let target = Calendar.current.dateInterval(of: .weekOfYear, for: jumpDate)?.start ?? jumpDate
+                weekOffset = Calendar.current.dateComponents([.weekOfYear], from: current, to: target).weekOfYear ?? 0
+                selectedDay = nil; choosingWeek = false
+              }
+            }
+        }.presentationDetents([.medium, .large])
+      }
       .task { await store.reconcile() }
       .task(id: week.start) { await store.loadCalendarEvents(in: week) }
       .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await store.reconcile() } } }
@@ -123,24 +174,18 @@ struct TrainingPlannerView: View {
     }
   }
 
-  private var planHeading: some View {
-    Text("Your training week").font(.title.bold())
-  }
-  private var newSessionButton: some View {
-    Button { createSession() } label: { Label("New session", systemImage: "plus") }
-      .buttonStyle(.borderedProminent).accessibilityIdentifier("new-training-session")
-  }
-
   private var weekNavigation: some View {
-    VStack(alignment: .leading, spacing: 16) {
+    VStack(alignment: .leading, spacing: 8) {
       HStack {
         Button { moveWeek(-1) } label: { Image(systemName: "chevron.left") }.accessibilityLabel("Previous week")
         Spacer()
         VStack(spacing: 3) {
-          Text(week.start.formatted(.dateTime.day().month()) + " – " +
-            (days.last ?? week.start).formatted(.dateTime.day().month())).font(.headline)
-          Text("\(weekEntries.count) sessions · \(weekEntries.reduce(0) { $0 + $1.durationMinutes }) min")
-            .font(.subheadline).foregroundStyle(.secondary)
+          Button { jumpDate = week.start; choosingWeek = true } label: {
+            Text(week.start.formatted(.dateTime.day().month()) + " – " +
+              (days.last ?? week.start).formatted(.dateTime.day().month())).font(.headline)
+          }.buttonStyle(.plain).accessibilityLabel("Choose training week")
+          Text("\(weekEntries.count) planned · \(weekWorkouts.count) performed")
+            .font(.caption).foregroundStyle(.secondary)
         }
         Spacer()
         Button { moveWeek(1) } label: { Image(systemName: "chevron.right") }.accessibilityLabel("Next week")
@@ -150,115 +195,129 @@ struct TrainingPlannerView: View {
   }
 
   private var overviewCard: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      weekNavigation
+    VStack(alignment: .leading, spacing: 10) {
       Chart {
-        ForEach(weekEntries) { entry in
-          BarMark(x: .value("Day", Calendar.current.startOfDay(for: entry.startDate), unit: .day),
-                  y: .value("Minutes", entry.durationMinutes))
-            .foregroundStyle(stateColor(entry.state))
-            .accessibilityLabel(entry.activity.title + ", " + entry.state.title)
-            .accessibilityValue("\(entry.durationMinutes) minutes")
+        ForEach(days, id: \.self) { day in
+          BarMark(x: .value("Day", day, unit: .day), y: .value("Minutes", plannedMinutes(on: day)))
+            .foregroundStyle(by: .value("Sessions", "Planned")).position(by: .value("Sessions", "Planned"))
+          BarMark(x: .value("Day", day, unit: .day), y: .value("Minutes", performedMinutes(on: day)))
+            .foregroundStyle(by: .value("Sessions", "Performed")).position(by: .value("Sessions", "Performed"))
         }
       }
+      .chartForegroundStyleScale(["Planned": RoburStyle.blue.opacity(0.5), "Performed": RoburStyle.orange])
       .chartXScale(domain: week.start...week.end)
       .chartXAxis { AxisMarks(values: .stride(by: .day)) { AxisValueLabel(format: .dateTime.weekday(.narrow)) } }
       .chartYAxis { AxisMarks(position: .leading) }
-      .chartYAxisLabel("min")
-      .frame(height: 155)
-      ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 8) {
-          ForEach(days, id: \.self) { day in dayButton(day) }
-        }
-      }
-      HStack(spacing: 14) {
-        ForEach(PlanEntryState.allCases, id: \.self) { state in
-          HStack(spacing: 4) {
-            Image(systemName: stateSymbol(state)).foregroundStyle(stateColor(state))
-            Text("\(weekEntries.filter { $0.state == state }.count) " + state.title).foregroundStyle(.secondary)
-          }
-        }
-      }.font(.caption2)
-    }.roburCard().accessibilityIdentifier("training-week-overview")
+      .chartYAxisLabel("min").frame(height: 135)
+      HStack(spacing: 4) { ForEach(days, id: \.self) { day in dayButton(day) } }
+    }.padding(14).background(RoburStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+      .accessibilityIdentifier("training-week-overview")
+  }
+
+  private func plannedMinutes(on day: Date) -> Double {
+    Double(weekEntries.filter { Calendar.current.isDate($0.startDate, inSameDayAs: day) }.reduce(0) { $0 + $1.durationMinutes })
+  }
+  private func performedMinutes(on day: Date) -> Double {
+    weekWorkouts.filter { Calendar.current.isDate($0.start, inSameDayAs: day) }.reduce(0) { $0 + $1.minutes }
   }
 
   private func dayButton(_ day: Date) -> some View {
-    let entries = weekEntries.filter { Calendar.current.isDate($0.startDate, inSameDayAs: day) }
+    let planned = weekEntries.filter { Calendar.current.isDate($0.startDate, inSameDayAs: day) }.count
+    let performed = weekWorkouts.filter { Calendar.current.isDate($0.start, inSameDayAs: day) }.count
     let selected = selectedDay.map { Calendar.current.isDate($0, inSameDayAs: day) } ?? false
-    return Button {
-      selectedDay = selected ? nil : day
-    } label: {
-      VStack(alignment: .leading, spacing: 6) {
-        HStack {
-          Text(day.formatted(.dateTime.weekday(.abbreviated))).font(.caption.bold())
-          Text(day.formatted(.dateTime.day())).font(.caption.monospacedDigit())
+    return Button { selectedDay = selected ? nil : day } label: {
+      VStack(spacing: 5) {
+        Text(day.formatted(.dateTime.weekday(.narrow))).font(.caption2).foregroundStyle(.secondary)
+        Text(day.formatted(.dateTime.day())).font(.subheadline.bold())
+        HStack(spacing: 3) {
+          Circle().fill(planned > 0 ? RoburStyle.blue.opacity(0.6) : .clear).frame(width: 4, height: 4)
+          Circle().fill(performed > 0 ? RoburStyle.orange : .clear).frame(width: 4, height: 4)
         }
-        if entries.isEmpty {
-          Text("No plan").font(.caption).foregroundStyle(.secondary)
-          Text("—").font(.caption)
-        } else {
-          ForEach(Array(entries.prefix(2))) { entry in
-            HStack(spacing: 3) {
-              Image(systemName: stateSymbol(entry.state)).foregroundStyle(color(entry.activity.category))
-              Text(entry.startDate.formatted(.dateTime.hour().minute()))
-            }.font(.caption2)
-          }
-          if entries.count > 2 { Text("+\(entries.count - 2) more").font(.caption2) }
-        }
-      }
-      .frame(minWidth: 80, minHeight: 62, alignment: .topLeading).padding(10)
-      .background(selected ? RoburStyle.orange.opacity(0.16) : RoburStyle.background,
-                  in: RoundedRectangle(cornerRadius: 12))
-      .overlay { RoundedRectangle(cornerRadius: 12).stroke(selected ? RoburStyle.orange : .clear, lineWidth: 1.5) }
+      }.frame(maxWidth: .infinity).padding(.vertical, 7)
+        .background(selected ? RoburStyle.orange.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 10))
     }.buttonStyle(.plain)
-    .accessibilityLabel(day.formatted(date: .complete, time: .omitted) + ", \(entries.count) planned sessions")
+      .accessibilityLabel(day.formatted(date: .complete, time: .omitted) + ", \(planned) planned, \(performed) performed")
+      .accessibilityAddTraits(selected ? .isSelected : [])
+  }
+
+  private var sessionsSection: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack {
+        Text(selectedDay.map { $0.formatted(.dateTime.weekday(.abbreviated).day().month()) } ?? "Sessions").font(.headline)
+        Spacer()
+        if selectedDay != nil { Button("Show week") { selectedDay = nil }.font(.caption) }
+        Button { generatePlan() } label: { Image(systemName: "sparkles") }
+          .accessibilityLabel("Suggest training sessions").accessibilityIdentifier("generate-training-plan")
+          .disabled(categories.isEmpty || generating)
+      }
+      Picker("Session filter", selection: $sessionFilter) {
+        ForEach(TrainingSessionFilter.allCases) { filter in Text(filter.rawValue).tag(filter) }
+      }.pickerStyle(.segmented)
+      if generating { ProgressView("Finding training time…").font(.caption) }
+      if visibleSessions.isEmpty {
+        ContentUnavailableView("No sessions to show", systemImage: "calendar.badge.plus",
+          description: Text("Add a session, choose another week or refresh Apple Health."))
+        Button("New session", systemImage: "plus") { createSession() }.buttonStyle(.bordered)
+          .accessibilityIdentifier("new-training-session")
+      } else {
+        LazyVStack(spacing: 0) {
+          ForEach(visibleSessions) { session in
+            if let entry = session.plan { entryCard(entry, workout: session.workout) }
+            else if let workout = session.workout { performedRow(workout) }
+            if session.id != visibleSessions.last?.id { Divider().padding(.horizontal, 12) }
+          }
+        }.background(RoburStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+      }
+    }
+  }
+
+  private var mixCategories: [TrainingCategory] {
+    TrainingCategory.allCases.filter { category in categories.contains(category) ||
+      weekEntries.contains { $0.activity.category == category } || weekWorkouts.contains { $0.activityType.category == category } }
   }
 
   private var trainingMixCard: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      Label("Weekly training mix", systemImage: "chart.bar.fill").font(.headline)
-      ForEach(TrainingCategory.allCases.filter { category in categories.contains(category) || weekEntries.contains { $0.activity.category == category } }) { category in
-        let matching = weekEntries.filter { $0.activity.category == category }
-        HStack {
-          Label(shortTitle(category), systemImage: category.symbol).foregroundStyle(color(category))
-          Spacer()
-          Text(matching.isEmpty ? "Not planned" : "\(matching.reduce(0) { $0 + $1.durationMinutes }) min · \(matching.count)")
-            .font(.caption).foregroundStyle(.secondary)
-          Image(systemName: matching.isEmpty ? "circle.dashed" : "checkmark.circle.fill")
-            .foregroundStyle(matching.isEmpty ? Color.secondary : color(category))
-        }.font(.subheadline)
-      }
-      Text("Coverage reflects your plan, including suggestions. Completed plans do not create Health workouts.")
+    VStack(alignment: .leading, spacing: 12) {
+      Label("Training mix", systemImage: "chart.bar.fill").font(.headline)
+      Chart {
+        ForEach(mixCategories) { category in
+          let planned = weekEntries.filter { $0.activity.category == category }.reduce(0) { $0 + $1.durationMinutes }
+          let performed = weekWorkouts.filter { $0.activityType.category == category }.reduce(0) { $0 + $1.minutes }
+          BarMark(x: .value("Minutes", Double(planned)), y: .value("Type", shortTitle(category)))
+            .foregroundStyle(by: .value("Sessions", "Planned")).position(by: .value("Sessions", "Planned"))
+          BarMark(x: .value("Minutes", performed), y: .value("Type", shortTitle(category)))
+            .foregroundStyle(by: .value("Sessions", "Performed")).position(by: .value("Sessions", "Performed"))
+        }
+      }.chartForegroundStyleScale(["Planned": RoburStyle.blue.opacity(0.5), "Performed": RoburStyle.orange])
+        .chartXAxisLabel("minutes").frame(height: max(130, CGFloat(mixCategories.count) * 44))
+      Text("Planned includes suggestions and checked-off plans. Performed comes from Apple Health.")
         .font(.caption).foregroundStyle(.secondary)
     }.roburCard()
   }
 
   private var muscleCoverageCard: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      Label("Planned muscle focus", systemImage: "figure.strengthtraining.traditional").font(.headline)
-      LazyVGrid(columns: [GridItem(.adaptive(minimum: 84))], alignment: .leading, spacing: 8) {
-        ForEach(MuscleGroup.allCases) { muscle in
-          let count = weekEntries.filter { $0.activity.category == .strength && $0.muscles.contains(muscle) }.count
-          HStack(spacing: 4) {
-            Image(systemName: count > 0 ? "checkmark.circle.fill" : "circle.dashed")
-            Text(muscle.rawValue)
-          }
-          .font(.caption.weight(count > 0 ? .semibold : .regular))
-          .foregroundStyle(count > 0 ? RoburStyle.orange : .secondary)
-          .padding(.vertical, 8).frame(maxWidth: .infinity)
-          .background(count > 0 ? RoburStyle.orange.opacity(0.12) : RoburStyle.background,
-            in: Capsule())
-          .accessibilityLabel("\(muscle.rawValue), \(count) planned strength sessions")
-        }
+    VStack(alignment: .leading, spacing: 12) {
+      Label("Muscle coverage", systemImage: "figure.strengthtraining.traditional").font(.headline)
+      HStack { Text("Muscle"); Spacer(); Text("Planned / Performed") }.font(.caption2).foregroundStyle(.secondary)
+      ForEach(MuscleGroup.allCases) { muscle in
+        let planned = weekEntries.filter { $0.activity.category == .strength && $0.muscles.contains(muscle) }.count
+        let performed = weekWorkouts.filter { $0.activityType.category == .strength &&
+          (journal.annotations[$0.id]?.muscles.contains(muscle) ?? false) }.count
+        HStack {
+          Text(muscle.rawValue).font(.caption)
+          Spacer()
+          Text("\(planned)").foregroundStyle(RoburStyle.blue)
+          Text("/").foregroundStyle(.secondary)
+          Text("\(performed)").foregroundStyle(performed > 0 ? RoburStyle.orange : .secondary)
+        }.font(.caption.bold()).monospacedDigit()
       }
-      Text("\(coveredMuscles.count) muscle groups included this week · choose the coverage that fits your goals")
-        .font(.caption).foregroundStyle(.secondary)
-      let missingFocus = weekEntries.filter { $0.activity.category == .strength && $0.muscles.isEmpty }
-      if !missingFocus.isEmpty {
-        Button("Add muscle focus to \(missingFocus.count) strength session\(missingFocus.count == 1 ? "" : "s")") {
-          store.focusedEntryID = missingFocus.first?.id
+      let missing = weekEntries.filter { $0.activity.category == .strength && $0.muscles.isEmpty }
+      if !missing.isEmpty {
+        Button("Add muscle focus to \(missing.count) plan\(missing.count == 1 ? "" : "s")") {
+          store.focusedEntryID = missing.first?.id
         }.font(.caption)
       }
+      Text("Performed muscle groups use your saved workout reviews.").font(.caption2).foregroundStyle(.secondary)
     }.roburCard()
   }
 
@@ -353,75 +412,111 @@ struct TrainingPlannerView: View {
     }.roburCard()
   }
 
-  private func entryCard(_ entry: PlanEntry) -> some View {
-    VStack(alignment: .leading, spacing: 12) {
-      HStack(alignment: .top) {
-        Label(entry.activity.title, systemImage: entry.activity.symbol).font(.headline)
-        Spacer()
-        Image(systemName: stateSymbol(entry.state)).foregroundStyle(color(entry.activity.category))
-          .accessibilityLabel(entry.state.title)
+  private func entryCard(_ entry: PlanEntry, workout: WorkoutRecord? = nil) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(alignment: .top, spacing: 10) {
+        Image(systemName: entry.activity.symbol).font(.title3).foregroundStyle(color(entry.activity.category))
+          .frame(width: 28, height: 30)
+        Button {
+          if let workout { selectedWorkout = workout } else { store.focusedEntryID = entry.id }
+        } label: {
+          VStack(alignment: .leading, spacing: 4) {
+            Text(entry.activity.title).font(.subheadline.bold())
+            Text(entry.startDate.formatted(.dateTime.weekday(.abbreviated).hour().minute()) + " · \(entry.durationMinutes) min planned")
+              .font(.caption).foregroundStyle(.secondary)
+            if entry.activity.category == .strength {
+              Text(entry.muscles.isEmpty ? "Choose muscle focus" : entry.muscleSummary)
+                .font(.caption).foregroundStyle(RoburStyle.orange)
+            }
+          }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+        }.buttonStyle(.plain)
+        VStack(alignment: .trailing, spacing: 6) {
+          Text(entry.state == .completed ? "Plan checked" : entry.state.title).font(.caption2.weight(.medium))
+            .foregroundStyle(stateColor(entry.state))
+          entryMenu(entry)
+        }
       }
-      Text(entry.startDate.formatted(date: .abbreviated, time: .shortened)).font(.subheadline)
-      HStack {
-        Text("\(entry.durationMinutes) min")
-        Text("· " + entry.state.title)
-      }.font(.caption).foregroundStyle(.secondary)
-      if entry.activity.category == .strength {
-        Label(entry.muscles.isEmpty ? "Choose muscle focus" : entry.muscleSummary,
-          systemImage: "figure.strengthtraining.traditional")
-          .font(.subheadline.weight(.medium)).foregroundStyle(RoburStyle.orange)
+      if let workout {
+        Button { selectedWorkout = workout } label: {
+          HStack(spacing: 5) {
+            Image(systemName: "checkmark.circle.fill")
+            Text("Performed \(workout.start.formatted(.dateTime.hour().minute())) · \(Int(workout.minutes)) min")
+            if let effort = workout.appleEffort { Text(String(format: "· %.1f/10", effort)) }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+          }.font(.caption).foregroundStyle(RoburStyle.orange)
+        }.buttonStyle(.plain)
+        Text("Near planned session · comparison only").font(.caption2).foregroundStyle(.secondary)
       }
       let overlaps = TrainingCalendar.conflicts(for: entry, events: store.calendarEvents, plans: store.entries)
       if !overlaps.isEmpty {
-        Label("\(overlaps.count) overlapping item\(overlaps.count == 1 ? "" : "s") · can still add",
-          systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(RoburStyle.orange)
+        Label("\(overlaps.count) overlap\(overlaps.count == 1 ? "" : "s") · allowed", systemImage: "exclamationmark.triangle")
+          .font(.caption2).foregroundStyle(RoburStyle.orange)
       }
       if entry.calendarSyncPending == true || entry.reminderSyncPending == true {
-        Label("Sync pending", systemImage: "arrow.clockwise").font(.caption).foregroundStyle(.secondary)
-      } else if entry.calendarEventID != nil {
-        Label("Calendar linked", systemImage: "link").font(.caption).foregroundStyle(.secondary)
+        Label("Sync pending", systemImage: "arrow.clockwise").font(.caption2).foregroundStyle(.secondary)
+      }
+    }.padding(12)
+  }
+
+  private func performedRow(_ workout: WorkoutRecord) -> some View {
+    let annotation = journal.annotations[workout.id] ?? WorkoutAnnotation()
+    return Button { selectedWorkout = workout } label: {
+      HStack(alignment: .top, spacing: 10) {
+        Image(systemName: workout.symbol).font(.title3).foregroundStyle(RoburStyle.orange).frame(width: 28, height: 30)
+        VStack(alignment: .leading, spacing: 4) {
+          Text(workout.title).font(.subheadline.bold())
+          Text(workout.start.formatted(.dateTime.weekday(.abbreviated).hour().minute()) + " · \(Int(workout.minutes)) min")
+            .font(.caption).foregroundStyle(.secondary)
+          if !annotation.muscles.isEmpty {
+            Text(annotation.muscles.map(\.rawValue).sorted().joined(separator: ", ")).font(.caption).foregroundStyle(RoburStyle.orange)
+          }
+          Text("Not linked to a plan").font(.caption2).foregroundStyle(.secondary)
+        }
+        Spacer(minLength: 4)
+        VStack(alignment: .trailing, spacing: 5) {
+          Label("Performed", systemImage: "checkmark.circle.fill").font(.caption2).foregroundStyle(RoburStyle.orange)
+          if let effort = workout.appleEffort { Text(String(format: "%.1f/10", effort)).font(.caption.bold()) }
+          Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
+        }
+      }.padding(12).contentShape(Rectangle())
+    }.buttonStyle(.plain)
+  }
+
+  private func entryMenu(_ entry: PlanEntry) -> some View {
+    Menu {
+      Button("Edit session", systemImage: "pencil") { store.focusedEntryID = entry.id }
+      if entry.state == .suggested {
+        Button("Confirm", systemImage: "checkmark") {
+          if entry.activity.category == .strength && entry.muscles.isEmpty { store.focusedEntryID = entry.id }
+          else { Task { await store.confirm(id: entry.id) } }
+        }
+      } else if entry.state == .confirmed {
+        Button("Start workout", systemImage: "play.fill") {
+          PhoneWorkoutRecorder.shared.queueStart(activity: entry.activity)
+          if !PhoneWorkoutRecorder.shared.isActive { PhoneWorkoutRecorder.shared.muscleGroups = entry.muscles }
+        }
+        Button("Mark plan completed", systemImage: "checkmark.circle") { Task { await store.complete(id: entry.id) } }
       }
       if (!entry.calendarWasExported || entry.calendarEventID == nil) && entry.state != .completed && entry.endDate > Date() {
-        Button(addingCalendarIDs.contains(entry.id) ? "Adding to Calendar…" : entry.calendarWasExported ? "Add again to Calendar" : "Add to Calendar", systemImage: "calendar.badge.plus") {
+        Button(addingCalendarIDs.contains(entry.id) ? "Adding to Calendar…" : "Add to Calendar", systemImage: "calendar.badge.plus") {
           addingCalendarIDs.insert(entry.id)
           Task {
             defer { addingCalendarIDs.remove(entry.id) }
             if !store.calendarAccess { await store.requestCalendarAccess() }
             if store.calendarAccess { await store.exportPlaceholders(ids: [entry.id], allowReExport: entry.calendarWasExported) }
           }
-        }
-        .buttonStyle(.bordered).disabled(addingCalendarIDs.contains(entry.id))
-        .accessibilityIdentifier("add-session-to-calendar-\(entry.id.uuidString)")
+        }.disabled(addingCalendarIDs.contains(entry.id))
+          .accessibilityIdentifier("add-session-to-calendar-\(entry.id.uuidString)")
       }
-      ViewThatFits(in: .horizontal) {
-        HStack { entryActions(entry) }
-        VStack(alignment: .leading) { entryActions(entry) }
-      }
-    }.roburCard()
-  }
-
-  @ViewBuilder private func entryActions(_ entry: PlanEntry) -> some View {
-    Button("Edit") { store.focusedEntryID = entry.id }.buttonStyle(.bordered)
-    Menu("More", systemImage: "ellipsis") {
       Button("Move one day later", systemImage: "calendar.badge.clock") { _ = store.reschedule(id: entry.id, days: 1) }
       Button("Move one week later", systemImage: "calendar.badge.clock") { _ = store.reschedule(id: entry.id, days: 7) }
       Button("Duplicate session", systemImage: "plus.square.on.square") {
         let date = Calendar.current.date(byAdding: .day, value: 7, to: entry.startDate) ?? entry.startDate
         if let id = store.duplicate(id: entry.id, startDate: date) { store.focusedEntryID = id }
       }
-      if entry.state == .confirmed { Button("Mark completed", systemImage: "checkmark.circle") { Task { await store.complete(id: entry.id) } } }
-    }
-    if entry.state == .suggested {
-      Button("Confirm") {
-        if entry.activity.category == .strength && entry.muscles.isEmpty { store.focusedEntryID = entry.id }
-        else { Task { await store.confirm(id: entry.id) } }
-      }.buttonStyle(.borderedProminent)
-    } else if entry.state == .confirmed {
-      Button("Start", systemImage: "play.fill") {
-        PhoneWorkoutRecorder.shared.queueStart(activity: entry.activity)
-        if !PhoneWorkoutRecorder.shared.isActive { PhoneWorkoutRecorder.shared.muscleGroups = entry.muscles }
-      }.buttonStyle(.borderedProminent)
-    }
+    } label: { Image(systemName: "ellipsis.circle").font(.title3).padding(4) }
+      .accessibilityLabel("Actions for \(entry.activity.title)")
   }
 
   private func generatePlan(minimumNewSessions: Int = 0) {

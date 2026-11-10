@@ -1,7 +1,16 @@
 import SwiftUI
 import Charts
 
+private enum HealthInsightPanel: String, CaseIterable, Identifiable {
+  case load = "Training load", recovery = "Recovery", activity = "Movement", balance = "Training mix"
+  case heatmap = "Activity calendar", zones = "Heart-rate zones", trends = "Health trends"
+  case report = "Weekly report", records = "Personal records", profile = "Health profile", scores = "Score details"
+  var id: String { rawValue }
+}
+
 struct HealthOverviewView: View {
+  var compactOnly = false
+  @State private var panel: HealthInsightPanel = .balance
   @Environment(\.horizontalSizeClass) private var widthClass
   @Environment(\.dynamicTypeSize) private var typeSize
   @EnvironmentObject private var healthKit: HealthKitClient
@@ -29,38 +38,26 @@ struct HealthOverviewView: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 20) {
-      LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: typeSize.isAccessibilitySize ? 1 : (widthClass == .regular ? 4 : 2)), spacing: 12) {
-        compactMetric("Readiness", value: summary.readiness.map(String.init) ?? "—", detail: "Personal baseline", symbol: "sun.max", tint: RoburStyle.teal, score: summary.readiness)
-        compactMetric("Fitness", value: summary.fitness.map(String.init) ?? "—", detail: "30-day outlook", symbol: "heart.circle", tint: RoburStyle.blue, score: summary.fitness)
-        compactMetric("Training load", value: loadComparison.changePercent.map { String(format: "%+.0f%%", $0) } ?? "—", detail: loadComparison.classification, symbol: "chart.xyaxis.line", tint: RoburStyle.orange)
-        compactMetric("Recovery", value: latestSleep?.sleepMinutes.map { String(format: "%.1fh", $0 / 60) } ?? "—", detail: latestSleep.map { "Sleep · \($0.date.formatted(date: .abbreviated, time: .omitted))" } ?? "Sleep unavailable", symbol: "bed.double", tint: RoburStyle.blue)
+    VStack(alignment: .leading, spacing: 16) {
+      summaryStrip
+      if compactOnly {
+        NavigationLink {
+          ScrollView {
+            HealthOverviewView().frame(maxWidth: RoburStyle.contentWidth).padding().frame(maxWidth: .infinity)
+          }.background(RoburStyle.background).navigationTitle("Health insights")
+        } label: {
+          HStack {
+            Label("Explore health insights", systemImage: "chart.bar.doc.horizontal")
+            Spacer()
+            Image(systemName: "chevron.right").font(.caption.bold())
+          }.font(.subheadline.weight(.semibold)).padding(.vertical, 8)
+        }.buttonStyle(.plain)
+      } else {
+        Picker("Insight", selection: $panel) {
+          ForEach(HealthInsightPanel.allCases) { item in Text(item.rawValue).tag(item) }
+        }.pickerStyle(.menu).accessibilityIdentifier("health-insight-selector")
+        selectedPanel
       }
-      AdaptiveCardLayout {
-        loadCard
-        recoveryCard
-        activityCard
-        balanceCard
-      }
-      NavigationLink {
-        ScrollView {
-          AdaptiveCardLayout {
-            heatmapCard
-            zoneCard
-            trendCard
-            reportCard
-            recordCard
-            profileCard
-            methodologyCard
-          }.frame(maxWidth: RoburStyle.contentWidth).padding().frame(maxWidth: .infinity)
-        }.background(RoburStyle.background).navigationTitle("Health insights")
-      } label: {
-        HStack {
-          Label("Health insights & score details", systemImage: "chart.bar.doc.horizontal")
-          Spacer()
-          Image(systemName: "chevron.right").font(.caption.bold())
-        }.font(.subheadline.bold()).roburCard()
-      }.buttonStyle(.plain)
     }
     .onChange(of: healthKit.dailyMetrics, initial: true) { _, _ in recalculate() }
     .onChange(of: healthKit.analyticsWorkouts) { _, _ in recalculate() }
@@ -71,14 +68,48 @@ struct HealthOverviewView: View {
     .sheet(isPresented: $editingTargets) { balanceTargetEditor }
   }
 
+  private var summaryStrip: some View {
+    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: typeSize.isAccessibilitySize ? 1 : (widthClass == .regular ? 4 : 2)), spacing: 10) {
+      compactMetric("Readiness", value: summary.readiness.map(String.init) ?? "—", detail: "Personal baseline", symbol: "sun.max", tint: RoburStyle.teal, score: summary.readiness)
+      compactMetric("Fitness", value: summary.fitness.map(String.init) ?? "—", detail: "30-day outlook", symbol: "heart.circle", tint: RoburStyle.blue, score: summary.fitness)
+      compactMetric("Load", value: loadComparison.changePercent.map { String(format: "%+.0f%%", $0) } ?? "—", detail: loadComparison.classification, symbol: "chart.xyaxis.line", tint: RoburStyle.orange)
+      compactMetric("Sleep", value: latestSleep?.sleepMinutes.map { String(format: "%.1fh", $0 / 60) } ?? "—", detail: latestSleep.map { $0.date.formatted(date: .abbreviated, time: .omitted) } ?? "No reading", symbol: "bed.double", tint: RoburStyle.blue)
+    }
+  }
+
+  @ViewBuilder private var selectedPanel: some View {
+    switch panel {
+    case .load: loadCard
+    case .recovery: recoveryCard
+    case .activity: activityCard
+    case .balance: balanceCard
+    case .heatmap: heatmapCard
+    case .zones: zoneCard
+    case .trends: trendCard
+    case .report: reportCard
+    case .records: recordCard
+    case .profile: profileCard
+    case .scores: methodologyCard
+    }
+  }
+
   private func compactMetric(_ title: String, value: String, detail: String, symbol: String,
                              tint: Color, score: Int? = nil) -> some View {
-    VStack(alignment: .leading, spacing: 9) {
-      Label(title, systemImage: symbol).font(.caption.bold()).foregroundStyle(tint)
-      Text(value).font(.system(.title, design: .rounded, weight: .bold)).monospacedDigit().minimumScaleFactor(0.7).lineLimit(1)
-      if let score { ProgressView(value: Double(score), total: 100).tint(tint) }
-      Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-    }.frame(maxWidth: .infinity, minHeight: 110, alignment: .topLeading).roburCard()
+    VStack(alignment: .leading, spacing: 5) {
+      HStack(alignment: .firstTextBaseline, spacing: 6) {
+        Label(title, systemImage: symbol).font(.caption.weight(.semibold)).foregroundStyle(tint)
+        Spacer(minLength: 0)
+      }
+      HStack(alignment: .firstTextBaseline) {
+        Text(value).font(.system(.title2, design: .rounded, weight: .bold)).monospacedDigit().minimumScaleFactor(0.7).lineLimit(1)
+        Spacer(minLength: 2)
+        if let score {
+          ProgressView(value: Double(score), total: 100).tint(tint).frame(maxWidth: 45)
+        }
+      }
+      Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+    }.frame(maxWidth: .infinity, minHeight: 66, alignment: .topLeading).padding(12)
+      .background(RoburStyle.surface, in: RoundedRectangle(cornerRadius: 16))
       .accessibilityElement(children: .combine)
   }
 

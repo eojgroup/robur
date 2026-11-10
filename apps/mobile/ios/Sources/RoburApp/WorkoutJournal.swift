@@ -4,12 +4,9 @@ import Combine
 @MainActor
 final class WorkoutJournal: ObservableObject {
   @Published private(set) var annotations: [String: WorkoutAnnotation] = [:]
-  @Published private(set) var gyms: [GymLocation] = []
-  @Published private(set) var visits: [GymVisit] = []
   @Published var storageError: String?
   private let url: URL
   private var unreadableArchive = false
-  private var suppressedGyms: Set<UUID> = []
   private let reviewStore: WorkoutReviewStore
   private var appliedReviewDates: [String: Date] = [:]
   private var pendingReviewDates: [String: Date] = [:]
@@ -17,9 +14,6 @@ final class WorkoutJournal: ObservableObject {
 
   private struct Archive: Codable, Equatable {
     var annotations: [String: WorkoutAnnotation]
-    var gyms: [GymLocation]
-    var visits: [GymVisit]
-    var suppressedGyms: Set<UUID>? = nil
     var appliedReviewDates: [String: Date]? = nil
     var pendingReviewDates: [String: Date]? = nil
   }
@@ -31,6 +25,16 @@ final class WorkoutJournal: ObservableObject {
       let data = try Data(contentsOf: self.url)
       let archive = try JSONDecoder().decode(Archive.self, from: data)
       restore(archive)
+      // Ignore removed fields while decoding, then atomically discard saved
+      // places/visits. A failed cleanup keeps all reviews loaded and leaves the
+      // original file intact; the next successful journal save retries cleanup.
+      if let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        let oldAnnotations = object["annotations"] as? [String: [String: Any]] ?? [:]
+        if ["gyms", "visits", "suppressedGyms"].contains(where: { object[$0] != nil }) ||
+            oldAnnotations.values.contains(where: { $0["gymID"] != nil }) {
+          persist()
+        }
+      }
     } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
       // A new journal starts empty.
     } catch {
@@ -125,113 +129,13 @@ final class WorkoutJournal: ObservableObject {
     }
   }
 
-  @discardableResult
-  func addGym(name: String, latitude: Double? = nil, longitude: Double? = nil) -> Bool {
-    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return false }
-    gyms.append(GymLocation(name: trimmed, latitude: latitude, longitude: longitude))
-    if persist() { return true }
-    gyms.removeLast()
-    return false
-  }
-
-  func updateGymPosition(id: UUID, latitude: Double, longitude: Double) {
-    guard latitude.isFinite, longitude.isFinite, (-90...90).contains(latitude), (-180...180).contains(longitude),
-          let index = gyms.firstIndex(where: { $0.id == id }) else { return }
-    let previous = archive
-    gyms[index].latitude = latitude
-    gyms[index].longitude = longitude
-    suppressedGyms.remove(id)
-    if let visitIndex = visits.lastIndex(where: { $0.gymID == id && $0.end == nil && $0.automatic == true }) {
-      visits[visitIndex].end = Date()
-    }
-    if !persist() { restore(previous) }
-  }
-
-  func deleteGym(_ gym: GymLocation) {
-    let previous = archive
-    gyms.removeAll { $0.id == gym.id }
-    for id in Array(annotations.keys) where annotations[id]?.gymID == gym.id {
-      annotations[id]?.gymID = nil
-    }
-    visits.removeAll { $0.gymID == gym.id }
-    suppressedGyms.remove(gym.id)
-    if !persist() {
-      annotations = previous.annotations
-      gyms = previous.gyms
-      visits = previous.visits
-      suppressedGyms = previous.suppressedGyms ?? []
-    }
-  }
-
-  var activeVisit: GymVisit? { visits.last { $0.end == nil } }
-  func gymName(_ id: UUID?) -> String? { gyms.first { $0.id == id }?.name }
-
-  func checkIn(_ gym: GymLocation, now: Date = Date()) {
-    guard gyms.contains(where: { $0.id == gym.id }) else { return }
-    let previous = visits
-    if let index = visits.lastIndex(where: { $0.end == nil }) { visits[index].end = now }
-    visits.append(GymVisit(gymID: gym.id, start: now))
-    if !persist() { visits = previous }
-  }
-
-  func checkOut(now: Date = Date()) {
-    if let index = visits.lastIndex(where: { $0.end == nil }) {
-      let previous = archive
-      suppressedGyms.insert(visits[index].gymID)
-      visits[index].end = max(now, visits[index].start)
-      if !persist() { restore(previous) }
-    }
-  }
-
-  func suggestedGym(for workout: WorkoutRecord) -> UUID? {
-    visits.last { visit in
-      visit.start <= workout.end && (visit.end ?? Date()) >= workout.start
-    }?.gymID
-  }
-
-  func automaticArrival(gymID: UUID, now: Date = Date()) {
-    guard gyms.contains(where: { $0.id == gymID }), !suppressedGyms.contains(gymID) else { return }
-    if let active = activeVisit {
-      guard active.gymID != gymID && active.automatic == true else { return }
-    }
-    let previous = archive
-    if let index = visits.lastIndex(where: { $0.end == nil }) { visits[index].end = max(now, visits[index].start) }
-    visits.append(GymVisit(gymID: gymID, start: now, automatic: true))
-    if !persist() { restore(previous) }
-  }
-
-  func automaticDeparture(gymID: UUID, now: Date = Date()) {
-    let previous = archive
-    suppressedGyms.remove(gymID)
-    if let index = visits.lastIndex(where: { $0.end == nil && $0.gymID == gymID && $0.automatic == true }) {
-      visits[index].end = max(now, visits[index].start)
-    }
-    if !persist() { restore(previous) }
-  }
-
-  func endAutomaticVisit(now: Date = Date()) {
-    guard activeVisit?.automatic == true else { return }
-    checkOut(now: now)
-  }
-
-  func deleteVisit(_ visit: GymVisit) {
-    let previous = archive
-    if visit.end == nil { suppressedGyms.insert(visit.gymID) }
-    visits.removeAll { $0.id == visit.id }
-    if !persist() { restore(previous) }
-  }
-
   private var archive: Archive {
-    Archive(annotations: annotations, gyms: gyms, visits: visits, suppressedGyms: suppressedGyms,
+    Archive(annotations: annotations,
             appliedReviewDates: appliedReviewDates, pendingReviewDates: pendingReviewDates)
   }
 
   private func restore(_ archive: Archive) {
     annotations = archive.annotations
-    gyms = archive.gyms
-    visits = archive.visits
-    suppressedGyms = archive.suppressedGyms ?? []
     appliedReviewDates = archive.appliedReviewDates ?? [:]
     pendingReviewDates = archive.pendingReviewDates ?? [:]
   }

@@ -20,7 +20,7 @@ final class WorkoutQuickReviewTests: XCTestCase {
     let data = Data(#"{"muscles":["Core"],"effort":7,"gymID":"4109357A-8C51-423B-89C3-04645AA12F4A","notes":"Legacy review"}"#.utf8)
     let annotation = try JSONDecoder().decode(WorkoutAnnotation.self, from: data)
     XCTAssertEqual(annotation, WorkoutAnnotation(muscles: [.core], effort: 7,
-      gymID: UUID(uuidString: "4109357A-8C51-423B-89C3-04645AA12F4A"), notes: "Legacy review"))
+      notes: "Legacy review"))
     XCTAssertNil(annotation.quickReview)
   }
 
@@ -29,12 +29,11 @@ final class WorkoutQuickReviewTests: XCTestCase {
     let url = temporaryURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     let store = WorkoutReviewStore(url: url)
-    let phone = WorkoutAnnotation(muscles: [.back, .core], effort: 9, gymID: UUID(), notes: "Controlled pace",
+    let phone = WorkoutAnnotation(muscles: [.back, .core], effort: 9, notes: "Controlled pace",
       quickReview: fullQuickReview)
     XCTAssertTrue(store.save(annotation: phone, forID: workoutID, updatedAt: date))
     let entry = try XCTUnwrap(store.reviews[workoutID])
     XCTAssertNil(entry.annotation.effort)
-    XCTAssertNil(entry.annotation.gymID)
     XCTAssertEqual(entry.annotation.quickReview, fullQuickReview)
     XCTAssertEqual(entry.annotation.muscles, phone.muscles)
     XCTAssertEqual(entry.annotation.notes, phone.notes)
@@ -94,15 +93,14 @@ final class WorkoutQuickReviewTests: XCTestCase {
   }
 
   @MainActor
-  func testIncomingStructuredReviewPreservesPhoneGymAndLegacyEffortWithoutEcho() async throws {
+  func testIncomingStructuredReviewPreservesLegacyEffortWithoutEcho() async throws {
     let url = temporaryURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     let store = WorkoutReviewStore(url: url.appendingPathExtension("reviews"))
     let journal = WorkoutJournal(url: url, reviewStore: store)
-    let gymID = UUID()
     let workout = WorkoutRecord(id: workoutID, start: date, end: date.addingTimeInterval(1_800), title: "Tennis",
       symbol: "tennis.racket", minutes: 30, distanceKm: nil, energyKcal: nil, averageHeartRate: nil, source: "Test")
-    XCTAssertTrue(journal.save(WorkoutAnnotation(muscles: [.core], effort: 7, gymID: gymID, notes: "Phone",
+    XCTAssertTrue(journal.save(WorkoutAnnotation(muscles: [.core], effort: 7, notes: "Phone",
       quickReview: WorkoutQuickReview(execution: .learning)), for: workout))
     let local = try XCTUnwrap(store.reviews[workoutID])
     store.markSynced(forID: workoutID, entry: local)
@@ -112,7 +110,7 @@ final class WorkoutQuickReviewTests: XCTestCase {
       updatedAt: local.updatedAt.addingTimeInterval(1))
     XCTAssertTrue(store.mergeRemote(entry: remote, forID: workoutID))
     journal.synchronizeReviews()
-    let expected = WorkoutAnnotation(effort: 7, gymID: gymID, notes: "Watch", quickReview: fullQuickReview)
+    let expected = WorkoutAnnotation(effort: 7, notes: "Watch", quickReview: fullQuickReview)
     XCTAssertEqual(journal.annotations[workoutID], expected)
     XCTAssertEqual(WorkoutJournal(url: url, reviewStore: store).annotations[workoutID], expected)
     XCTAssertTrue(store.pendingReviewedIDs.isEmpty)
