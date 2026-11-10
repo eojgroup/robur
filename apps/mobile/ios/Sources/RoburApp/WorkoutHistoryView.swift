@@ -20,50 +20,48 @@ struct WorkoutHistoryView: View {
   }
 
   var body: some View {
-    NavigationStack {
-      ScrollView {
-        LazyVStack(alignment: .leading, spacing: 16) {
-          HistoryRangePicker()
-          if let error = healthKit.effortImportError {
-            Text(error).font(.caption).foregroundStyle(.secondary)
-            Button("Review Health access") { healthKit.requestAuthorization() }
-          } else if let status = healthKit.effortImportStatus {
-            Text(status).font(.caption).foregroundStyle(.secondary)
+    ScrollView {
+      LazyVStack(alignment: .leading, spacing: 16) {
+        HistoryRangePicker()
+        if let error = healthKit.effortImportError {
+          Text(error).font(.caption).foregroundStyle(.secondary)
+          Button("Review Health access") { healthKit.requestAuthorization() }
+        } else if let status = healthKit.effortImportStatus {
+          Text(status).font(.caption).foregroundStyle(.secondary)
+        }
+        HStack {
+          Menu {
+            Button("All muscles") { muscle = nil }
+            ForEach(MuscleGroup.allCases) { group in Button(group.rawValue) { muscle = group } }
+          } label: { Label(muscle?.rawValue ?? "All muscles", systemImage: "line.3.horizontal.decrease.circle") }
+        }.font(.subheadline)
+        Text("\(filtered.count) workouts · \(Int(filtered.reduce(0) { $0 + $1.minutes })) min")
+          .font(.headline).monospacedDigit()
+        if filtered.isEmpty && !healthKit.isLoadingHistory {
+          ContentUnavailableView("No workouts to show", systemImage: "figure.run",
+            description: Text("Choose a wider history, clear filters, or share workouts in Apple Health. Workouts recorded with Apple Watch and other Health apps appear here after a refresh."))
+        }
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16, alignment: .top),
+          count: AdaptiveCardLayout.columnCount(for: contentWidth)), spacing: 16) {
+          ForEach(filtered) { workout in
+            Button { selected = workout } label: {
+              WorkoutRow(workout: workout, annotation: journal.annotations[workout.id] ?? WorkoutAnnotation())
+            }.buttonStyle(.plain)
           }
-          HStack {
-            Menu {
-              Button("All muscles") { muscle = nil }
-              ForEach(MuscleGroup.allCases) { group in Button(group.rawValue) { muscle = group } }
-            } label: { Label(muscle?.rawValue ?? "All muscles", systemImage: "line.3.horizontal.decrease.circle") }
-          }.font(.subheadline)
-          Text("\(filtered.count) workouts · \(Int(filtered.reduce(0) { $0 + $1.minutes })) min")
-            .font(.headline).monospacedDigit()
-          if filtered.isEmpty && !healthKit.isLoadingHistory {
-            ContentUnavailableView("No workouts to show", systemImage: "figure.run",
-              description: Text("Choose a wider history, clear filters, or share workouts in Apple Health. Workouts recorded with Apple Watch and other Health apps appear here after a refresh."))
-          }
-          LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16, alignment: .top),
-            count: AdaptiveCardLayout.columnCount(for: contentWidth)), spacing: 16) {
-            ForEach(filtered) { workout in
-              Button { selected = workout } label: {
-                WorkoutRow(workout: workout, annotation: journal.annotations[workout.id] ?? WorkoutAnnotation())
-              }.buttonStyle(.plain)
-            }
-          }
-          HistoryPermissionView()
-        }.frame(maxWidth: RoburStyle.contentWidth)
-          .background { GeometryReader { proxy in
-            Color.clear.onAppear { contentWidth = proxy.size.width }
-              .onChange(of: proxy.size.width) { _, width in contentWidth = width }
-          } }
-          .padding().frame(maxWidth: .infinity)
-      }
-      .background(RoburStyle.background)
-      .navigationTitle("Workouts").navigationBarTitleDisplayMode(.inline)
-      .searchable(text: $search, prompt: "Workout, muscle or notes")
-      .refreshable { await healthKit.loadHistory(range: healthKit.historyRange) }
-      .sheet(item: $selected) { WorkoutDetailView(workout: $0) }
+        }
+        HistoryPermissionView()
+      }.frame(maxWidth: RoburStyle.contentWidth)
+        .background { GeometryReader { proxy in
+          Color.clear.onAppear { contentWidth = proxy.size.width }
+            .onChange(of: proxy.size.width) { _, width in contentWidth = width }
+        } }
+        .padding().frame(maxWidth: .infinity)
     }
+    .background(RoburStyle.background)
+    .navigationTitle("Workouts").navigationBarTitleDisplayMode(.inline)
+    .searchable(text: $search, prompt: "Workout, muscle or notes")
+    .refreshable { await healthKit.loadHistory(range: healthKit.historyRange) }
+    .sheet(item: $selected) { WorkoutDetailView(workout: $0) }
   }
 }
 

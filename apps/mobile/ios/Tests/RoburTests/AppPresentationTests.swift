@@ -78,7 +78,7 @@ final class AppPresentationTests: XCTestCase {
     await planner.reconcile()
     await planner.loadCalendarEvents(in: Calendar.current.dateInterval(of: .weekOfYear, for: now)!)
     let screens: [(String, AnyView)] = [
-      ("workouts", AnyView(WorkoutHistoryView())),
+      ("workouts", AnyView(NavigationStack { WorkoutHistoryView() })),
       ("overview", AnyView(FitnessHistoryView())),
       ("insights", AnyView(ScrollView { HealthOverviewView().frame(maxWidth: RoburStyle.contentWidth).padding().frame(maxWidth: .infinity) }
         .background(RoburStyle.background))),
