@@ -83,6 +83,7 @@ targets:
       - path: Sources/RoburShared/WorkoutQuickReview.swift
       - path: Sources/RoburShared/TrainingBalance.swift
       - path: Sources/RoburShared/TrainingInsights.swift
+      - path: Sources/RoburShared/RecoveryInsights.swift
       - path: Sources/RoburShared/HealthInsights.swift
       - path: Sources/RoburShared/WidgetHealthSummary.swift
       - path: Resources/PrivacyInfo.xcprivacy
@@ -115,6 +116,7 @@ targets:
       - path: Sources/RoburShared/WorkoutQuickReview.swift
       - path: Sources/RoburShared/TrainingBalance.swift
       - path: Sources/RoburShared/TrainingInsights.swift
+      - path: Sources/RoburShared/RecoveryInsights.swift
       - path: Sources/RoburShared/HealthInsights.swift
       - path: Sources/RoburShared/WidgetHealthSummary.swift
       - path: Resources/PrivacyInfo.xcprivacy

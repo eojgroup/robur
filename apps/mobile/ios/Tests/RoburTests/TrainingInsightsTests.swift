@@ -39,8 +39,8 @@ final class TrainingInsightsTests: XCTestCase {
     let baselineHR = result.readinessComponents.first { $0.title == "Resting HR" }
     let hrv = result.readinessComponents.first { $0.title == "HRV" }
     XCTAssertEqual(baselineHR?.value, 90)
-    XCTAssertEqual(hrv?.value, 90)
-    XCTAssertEqual(result.readiness, 82)
+    XCTAssertEqual(hrv?.value, 88)
+    XCTAssertEqual(result.readiness, 83)
     XCTAssertTrue(baselineHR?.explanation.contains("60.0") == true)
   }
 
@@ -63,7 +63,7 @@ final class TrainingInsightsTests: XCTestCase {
     XCTAssertEqual(result.load7, 150)
     XCTAssertEqual(result.load28, 300)
     XCTAssertEqual(result.loadRatio ?? 0, 2, accuracy: 0.001)
-    XCTAssertEqual(result.loadStatus, "High")
+    XCTAssertEqual(result.loadStatus, "Above recent average")
   }
 
   func testHeartZonesWeightTimeAndCapUnobservedGapsAtSixtySeconds() {

@@ -1,0 +1,110 @@
+name: Validate and deploy low-cost health cloud
+
+on:
+  push:
+    branches: [main]
+    paths: ["apps/api/**", "apps/web/**", "packages/**", "infra/gcp/cloud-run/**", "infra/gcp/sql/**", "infra/cloudbuild-health.yaml", ".github/workflows/cloud-run-deploy.yml", "pnpm-lock.yaml", "package.json"]
+  pull_request:
+    paths: ["apps/api/**", "apps/web/**", "packages/**", "infra/gcp/cloud-run/**", "infra/gcp/sql/**", "infra/cloudbuild-health.yaml", ".github/workflows/cloud-run-deploy.yml", "pnpm-lock.yaml", "package.json"]
+  workflow_dispatch:
+    inputs:
+      deploy_production:
+        description: Deploy the tested application to the existing reviewed Cloud Run infrastructure
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: robur-health-cloud-${{ github.event_name == 'workflow_dispatch' && inputs.deploy_production == true && 'production' || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.8.5
+      - name: Validate cost-bounded infrastructure
+        working-directory: infra/gcp/cloud-run
+        run: |
+          terraform fmt -check -recursive
+          terraform init -backend=false
+          terraform validate
+
+  deploy:
+    needs: validate
+    if: vars.GCP_DEPLOYMENT_PLATFORM == 'cloud-run' && vars.GCP_DEPLOYMENTS_ENABLED == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.deploy_production == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION || 'europe-west2' }}
+      SERVICE: robur-health
+      MIGRATION_JOB: robur-health-migrate
+      GOOGLE_WEB_CLIENT_ID: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_TERRAFORM_SERVICE_ACCOUNT }}
+          token_format: access_token
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGION }}-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+      - name: Build and push combined web and API
+        run: |
+          set -euo pipefail
+          image="$REGION-docker.pkg.dev/$PROJECT_ID/robur-app/robur-api:$GITHUB_SHA"
+          docker build -f apps/api/Dockerfile -t "$image" .
+          docker push "$image"
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Run schema migrations with the isolated migration identity
+        run: |
+          set -euo pipefail
+          gcloud run jobs update "$MIGRATION_JOB" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE" --quiet
+          gcloud run jobs execute "$MIGRATION_JOB" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+      - name: Deploy without increasing the approved resource envelope
+        run: |
+          set -euo pipefail
+          if [[ -z "$GOOGLE_WEB_CLIENT_ID" ]]; then
+            echo "GOOGLE_WEB_CLIENT_ID must be configured before enabling production sign-in." >&2
+            exit 1
+          fi
+          gcloud run services update "$SERVICE" --project "$PROJECT_ID" --region "$REGION" \
+            --image "$IMAGE" --update-env-vars "GOOGLE_WEB_CLIENT_ID=$GOOGLE_WEB_CLIENT_ID" \
+            --min-instances 0 --max-instances 1 --concurrency 20 --timeout 60 --quiet
+      - name: Verify HTTPS and authentication boundary
+        run: |
+          set -euo pipefail
+          service_url="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          curl --fail --silent --show-error "$service_url/healthz"
+          status="$(curl --silent --output /dev/null --write-out '%{http_code}' "$service_url/api/cloud/data")"
+          [[ "$status" == "401" ]] || { echo "Unauthenticated health data must be rejected; received $status" >&2; exit 1; }
+          echo "Deployed $service_url" >> "$GITHUB_STEP_SUMMARY"

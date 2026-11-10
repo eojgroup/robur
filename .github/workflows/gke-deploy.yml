@@ -126,7 +126,7 @@ jobs:
   build:
     name: Build and push containers
     # GCP is paused. Resuming requires the repository opt-in and an explicit dispatch.
-    if: vars.GCP_DEPLOYMENTS_ENABLED == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.deploy_production == true
+    if: vars.GCP_DEPLOYMENT_PLATFORM == 'gke' && vars.GCP_DEPLOYMENTS_ENABLED == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.deploy_production == true
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 30

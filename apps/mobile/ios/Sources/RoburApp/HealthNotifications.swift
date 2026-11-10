@@ -198,6 +198,7 @@ struct HealthSettingsView: View {
           .font(.caption).foregroundStyle(.secondary)
       }
       Section("Health access") {
+        NavigationLink("Web dashboard & optional sync") { HealthSyncSettingsView() }
         Button("Review requested Health categories") { healthKit.requestAuthorization() }
         Text("Weight, height, body composition and supported Health characteristics are optional. Apple’s Medical ID, emergency contacts and clinical records are not imported. Manage existing permissions in the Health app.")
           .font(.caption).foregroundStyle(.secondary)

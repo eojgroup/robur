@@ -2,7 +2,7 @@ import SwiftUI
 import Charts
 
 private enum OverviewGraph: String, CaseIterable, Identifiable {
-  case training = "Training", recovery = "Recovery", fitness = "Health"
+  case recoveryScore = "Recovery", fitnessScore = "Fitness", training = "Load", recovery = "Signals", fitness = "Health"
   var id: String { rawValue }
 }
 
@@ -10,7 +10,12 @@ struct FitnessHistoryView: View {
   @EnvironmentObject private var healthKit: HealthKitClient
   @EnvironmentObject private var journal: WorkoutJournal
   @Environment(\.dynamicTypeSize) private var typeSize
-  @State private var graph: OverviewGraph = .training
+  @AppStorage("RoburMaxHeartRate") private var maxHR = 190.0
+  @AppStorage("RoburStepsGoal") private var stepsGoal = 8_000.0
+  @AppStorage("RoburExerciseGoal") private var exerciseGoal = 30.0
+  @State private var graph: OverviewGraph = .recoveryScore
+  @State private var scoreVariation: RecoveryChartVariation = .history
+  @State private var scoreAnalysis: RecoveryAnalysis?
   @State private var contentWidth: CGFloat = 360
   @State private var showingDay = false
   @State private var showingMuscles = false
@@ -92,6 +97,11 @@ struct FitnessHistoryView: View {
       }
       .refreshable { await healthKit.refreshTodaySnapshot(); await healthKit.loadHistory(range: healthKit.historyRange) }
       .onChange(of: healthKit.workouts, initial: true) { _, _ in recalculate() }
+      .onChange(of: healthKit.analyticsWorkouts) { _, _ in recalculate() }
+      .onChange(of: journal.annotations) { _, _ in recalculate() }
+      .onChange(of: maxHR) { _, _ in recalculate() }
+      .onChange(of: stepsGoal) { _, _ in recalculate() }
+      .onChange(of: exerciseGoal) { _, _ in recalculate() }
       .onChange(of: healthKit.dailyMetrics) { _, _ in recalculate() }
       .onChange(of: signal) { _, _ in recalculate() }
       .onChange(of: healthKit.historyRange) { _, _ in selectedDate = nil; recalculate() }
@@ -140,12 +150,18 @@ struct FitnessHistoryView: View {
   }
 
   private func recalculate() {
+    scoreAnalysis = RecoveryInsights.make(days: healthKit.dailyMetrics, workouts: healthKit.analyticsWorkouts,
+      annotations: journal.annotations, maxHR: maxHR,
+      historyStart: healthKit.analyticsHistoryStart, stepsGoal: stepsGoal,
+      exerciseGoal: exerciseGoal)
     timeline = TrainingTimeline.make(workouts: healthKit.workouts, days: healthKit.dailyMetrics,
       signal: signal, grain: grain, start: healthKit.historyRange.startDate())
   }
 
   private var graphTitle: String {
     switch graph {
+    case .recoveryScore: return "Recovery & readiness"
+    case .fitnessScore: return "Your fitness over time"
     case .training: return showLoad ? "Training load" : "Training minutes"
     case .recovery: return signal.rawValue
     case .fitness: return metric.rawValue
@@ -190,6 +206,7 @@ struct FitnessHistoryView: View {
       DisclosureGroup("Sources & coverage") {
         VStack(alignment: .leading, spacing: 6) {
           Text("\(healthKit.workouts.count) workouts · \(timeline.buckets.reduce(0) { $0 + $1.ratedSessions }) with Apple effort. Load is duration × imported Apple Fitness rating or Apple estimate; unrated sessions are excluded.")
+          Text("Scores use \(RecoveryAnalysis.version), consistently recomputed from currently available history. Recovery combines eligible autonomic, sleep and training-demand components. Fitness excludes acute recovery; it describes personal cardio change and sustained participation, not a clinical fitness measurement.")
           Text("Recovery averages include recorded days only. The dashed line uses each reading’s prior 30 days, with at least 7 recorded days. Missing measurements stay empty.")
           Text("Markers highlight long or high-effort sessions, marathon-distance runs and changes in sleep, HRV or resting heart rate. Associations do not establish cause.")
           Text("All history includes every record Apple Health permits Robur to read. A marathon-distance marker describes at least 42.195 km; it does not identify a race.")
@@ -202,6 +219,11 @@ struct FitnessHistoryView: View {
 
   @ViewBuilder private var selectedGraph: some View {
     switch graph {
+    case .recoveryScore, .fitnessScore:
+      if let scoreAnalysis {
+        RecoveryScoreCharts(analysis: scoreAnalysis, isFitness: graph == .fitnessScore, range: healthKit.historyRange,
+          variation: scoreVariation, height: graphHeight, selectedDate: $selectedDate)
+      } else { ProgressView("Calculating your history…").frame(height: graphHeight) }
     case .training: trainingChart
     case .recovery: recoveryChart
     case .fitness: fitnessCard
@@ -210,6 +232,10 @@ struct FitnessHistoryView: View {
 
   @ViewBuilder private var graphOptions: some View {
     switch graph {
+    case .recoveryScore, .fitnessScore:
+      Picker("Score visualization", selection: $scoreVariation) {
+        ForEach(RecoveryChartVariation.allCases) { item in Text(item.rawValue).tag(item) }
+      }.pickerStyle(.menu).font(.caption.weight(.semibold))
     case .training:
       Menu {
         Picker("Training measure", selection: $showLoad) {
@@ -323,6 +349,17 @@ struct FitnessHistoryView: View {
             Text(selectedHealth?[keyPath: metric.key].map { "\(Int($0.rounded())) \(metric.unit)" } ?? "No reading").font(.headline)
           }
         }
+      }
+      if let point = scoreAnalysis?.history.first(where: { Calendar.current.isDate($0.date, inSameDayAs: inspectedDate ?? Date()) }) {
+        HStack {
+          Text("Recovery \(point.recovery.map(String.init) ?? "—")/100")
+          Spacer()
+          Text("Fitness \(point.fitness.map(String.init) ?? "—")/100")
+        }.font(.headline).monospacedDigit()
+        ForEach(point.recoveryComponents) { component in
+          LabeledContent(component.title, value: String(format: "%.1f pts · %d/100", component.contribution, component.score)).font(.caption)
+        }
+        Text("Historical point · \(Int((point.coverage * 100).rounded()))% eligible recovery input weight").font(.caption2).foregroundStyle(.secondary)
       }
       if let date = inspectedDate {
         ForEach(timeline.events.filter { Calendar.current.isDate($0.date, inSameDayAs: date) }) { event in

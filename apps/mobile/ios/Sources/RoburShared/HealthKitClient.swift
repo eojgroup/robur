@@ -755,7 +755,9 @@ extension HealthKitClient {
       DailyHealthMetrics(date: date, sleepMinutes: values[.sleep]?[date], steps: values[.steps]?[date],
         exerciseMinutes: values[.exercise]?[date], standMinutes: values[.stand]?[date],
         activeEnergyKcal: values[.energy]?[date], restingHR: values[.restingHR]?[date],
-        hrv: values[.hrv]?[date], vo2Max: values[.cardio]?[date], weightKg: values[.weight]?[date])
+        hrv: values[.hrv]?[date], vo2Max: values[.cardio]?[date], weightKg: values[.weight]?[date],
+        respiratoryRate: values[.respiratoryRate]?[date], oxygenSaturation: values[.oxygenSaturation]?[date],
+        bodyFatPercent: values[.bodyFat]?[date], bmi: values[.bmi]?[date], heightCm: values[.height]?[date])
     }
     let readings = values.flatMap { metric, daily in
       daily.map { date, value in

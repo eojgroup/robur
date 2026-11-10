@@ -27,7 +27,7 @@
   <key>NSHealthUpdateUsageDescription</key>
   <string>Robur saves workouts you choose to record to Apple Health, where they are available in Fitness. Your existing workouts and effort ratings are preserved.</string>
   <key>NSHealthShareUsageDescription</key>
-  <string>Robur reads workouts and Apple Fitness effort, heart rate, sleep, activity, steps, exercise and stand minutes, cardio fitness, weight, height, body composition and approved Health characteristics to calculate private readiness, training load and health trends on this device.</string>
+  <string>Robur reads workouts and Apple Fitness effort, heart rate, sleep, activity, steps, exercise and stand minutes, cardio fitness, weight, height, body composition and approved Health characteristics to calculate recovery, training load and fitness trends. Data stays on this device unless you separately enable web sync and choose what to upload.</string>
   <key>UIApplicationSceneManifest</key>
   <dict>
     <key>UIApplicationSupportsMultipleScenes</key>

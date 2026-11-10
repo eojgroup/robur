@@ -2,7 +2,7 @@ import SwiftUI
 import Charts
 
 private enum HealthInsightPanel: String, CaseIterable, Identifiable {
-  case load = "Training load", recovery = "Recovery", activity = "Movement", balance = "Training mix"
+  case load = "Training load", recovery = "Sleep & autonomic", activity = "Movement", balance = "Training mix"
   case heatmap = "Activity calendar", zones = "Heart-rate zones", trends = "Health trends"
   case report = "Weekly report", records = "Personal records", profile = "Health profile", scores = "Score details"
   var id: String { rawValue }
@@ -10,7 +10,7 @@ private enum HealthInsightPanel: String, CaseIterable, Identifiable {
 
 struct HealthOverviewView: View {
   var compactOnly = false
-  @State private var panel: HealthInsightPanel = .balance
+  @State private var panel: HealthInsightPanel = .scores
   @Environment(\.horizontalSizeClass) private var widthClass
   @Environment(\.dynamicTypeSize) private var typeSize
   @EnvironmentObject private var healthKit: HealthKitClient
@@ -70,8 +70,8 @@ struct HealthOverviewView: View {
 
   private var summaryStrip: some View {
     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: typeSize.isAccessibilitySize ? 1 : (widthClass == .regular ? 4 : 2)), spacing: 10) {
-      compactMetric("Readiness", value: summary.readiness.map(String.init) ?? "—", detail: "Personal baseline", symbol: "sun.max", tint: RoburStyle.teal, score: summary.readiness)
-      compactMetric("Fitness", value: summary.fitness.map(String.init) ?? "—", detail: "30-day outlook", symbol: "heart.circle", tint: RoburStyle.blue, score: summary.fitness)
+      compactMetric("Recovery", value: summary.readiness.map(String.init) ?? "—", detail: summary.recoveryAnalysis.confidence, symbol: "sun.max", tint: RoburStyle.teal, score: summary.readiness)
+      compactMetric("Fitness", value: summary.fitness.map(String.init) ?? "—", detail: "Personal progress index", symbol: "heart.circle", tint: RoburStyle.blue, score: summary.fitness)
       compactMetric("Load", value: loadComparison.changePercent.map { String(format: "%+.0f%%", $0) } ?? "—", detail: loadComparison.classification, symbol: "chart.xyaxis.line", tint: RoburStyle.orange)
       compactMetric("Sleep", value: latestSleep?.sleepMinutes.map { String(format: "%.1fh", $0 / 60) } ?? "—", detail: latestSleep.map { $0.date.formatted(date: .abbreviated, time: .omitted) } ?? "No reading", symbol: "bed.double", tint: RoburStyle.blue)
     }
@@ -144,7 +144,7 @@ struct HealthOverviewView: View {
 
   private func recalculate() {
     cachedSummary = TrainingInsights.make(days: healthKit.dailyMetrics, workouts: healthKit.analyticsWorkouts,
-      annotations: journal.annotations, maxHR: maxHR, stepsGoal: stepsGoal, exerciseGoal: exerciseGoal)
+      annotations: journal.annotations, maxHR: maxHR, stepsGoal: stepsGoal, exerciseGoal: exerciseGoal, historyStart: healthKit.analyticsHistoryStart)
   }
 
 
@@ -520,29 +520,60 @@ struct HealthOverviewView: View {
   }
 
   private var methodologyCard: some View {
-    DisclosureGroup {
-      VStack(alignment: .leading, spacing: 12) {
-        Text("Readiness inputs").font(.subheadline.bold())
-        ForEach(Array(summary.readinessComponents.enumerated()), id: \.offset) { _, score in
-          VStack(alignment: .leading, spacing: 4) {
-            HStack { Text(score.title).font(.subheadline); Spacer(); Text("\(score.value)/100").monospacedDigit() }
-            ProgressView(value: Double(score.value), total: 100).tint(RoburStyle.blue)
-            Text(score.explanation).font(.caption).foregroundStyle(.secondary)
-          }
+    let analysis = summary.recoveryAnalysis
+    return VStack(alignment: .leading, spacing: 16) {
+      Label("What builds your scores", systemImage: "function").font(.headline)
+      HStack {
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Recovery & readiness").font(.caption).foregroundStyle(.secondary)
+          Text(analysis.score.map { "\($0)/100" } ?? "More data needed").font(.title2.bold())
         }
-        Text("Fitness components").font(.subheadline.bold())
-        ForEach(Array(summary.scores.enumerated()), id: \.offset) { _, score in
-          VStack(alignment: .leading, spacing: 4) {
-            HStack { Text(score.title).font(.subheadline.bold()); Spacer(); Text("\(score.value)/100").monospacedDigit() }
-            ProgressView(value: Double(score.value), total: 100).tint(RoburStyle.teal)
-            Text(score.explanation).font(.caption).foregroundStyle(.secondary)
-          }
+        Spacer()
+        Text("\(Int((analysis.coverage * 100).rounded()))% input coverage\n\(analysis.baselineDays) baseline days")
+          .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+      }
+      Text("One overall recovery score combines current autonomic signals, sleep and recent training demand. At least two independent direct signals need a personal baseline; sleep alone cannot produce it.")
+        .font(.caption).foregroundStyle(.secondary)
+      componentBreakdown(analysis.recoveryComponents)
+      if let debt = analysis.sleepDebtMinutes {
+        LabeledContent("Observed recent sleep shortfall", value: String(format: "%.0f min/night", debt)).font(.caption)
+      }
+      Divider()
+      Text("Fitness · \(analysis.fitnessScore.map { "\($0)/100" } ?? "building history")").font(.headline)
+      componentBreakdown(analysis.fitnessComponents)
+      Text("Fitness reflects sustained cardio change, activity, consistency and strength participation. Today's sleep or autonomic readings do not directly change fitness. It is a personal progress index, not measured VO₂ max, strength or an age-adjusted percentile.")
+        .font(.caption).foregroundStyle(.secondary)
+      DisclosureGroup("Method, limits & references") {
+        VStack(alignment: .leading, spacing: 10) {
+          Text("\(analysis.methodologyVersion). All historical points use this same method and only observations dated by that point. Additional Health history, edited ratings and changed activity goals can revise recalculated scores.")
+          Text("Recorded Apple effort × duration follows the session-RPE approach, but Apple estimates and heart-rate fallbacks are different sources and cannot be treated as validated RPE. 7/42-day load smoothing describes recent and longer-term observed demand. It does not predict injury or establish a universal safe training zone.")
+          Text("Apple HRV uses SDNN; research using RMSSD cannot be transferred directly to these values. Timing, illness, mental stress, alcohol, travel and missing measurements can all affect the inputs. The 0–100 formula and weights are Robur's transparent heuristic, not an industry-certified readiness algorithm.")
+          Link("Session-RPE research · Foster et al.", destination: URL(string: "https://pubmed.ncbi.nlm.nih.gov/11708692/")!)
+          Link("Training impulse-response model · Morton et al.", destination: URL(string: "https://pubmed.ncbi.nlm.nih.gov/2246166/")!)
+          Link("Apple HealthKit HRV SDNN", destination: URL(string: "https://developer.apple.com/documentation/healthkit/hkquantitytypeidentifier/heartratevariabilitysdnn")!)
+        }.font(.caption).foregroundStyle(.secondary).padding(.top, 6)
+      }.font(.caption)
+    }.roburCard()
+  }
+
+  @ViewBuilder private func componentBreakdown(_ components: [RecoveryScoreComponent]) -> some View {
+    if components.isEmpty { Text("More readings and baseline history are needed.").font(.caption).foregroundStyle(.secondary) }
+    ForEach(components) { item in
+      VStack(alignment: .leading, spacing: 6) {
+        HStack {
+          Text(item.title).font(.subheadline.weight(.semibold))
+          Spacer()
+          Text(String(format: "%.1f points", item.contribution)).font(.subheadline.bold()).monospacedDigit()
         }
-        Text("These are transparent training heuristics, not clinical assessments. Missing or denied data is never replaced with a fabricated measurement. A score can change when you share more categories or history.")
-          .font(.caption).foregroundStyle(.secondary)
-      }.padding(.top, 12)
-    } label: { Label("How your scores are calculated", systemImage: "function").font(.headline) }
-      .roburCard()
+        HStack {
+          Text("\(item.score)/100 × \(Int((item.effectiveWeight * 100).rounded()))% effective weight")
+          Spacer()
+          Text(String(format: "%.1f %@", item.current, item.unit))
+        }.font(.caption).foregroundStyle(.secondary)
+        ProgressView(value: Double(item.score), total: 100).tint(RoburStyle.orange)
+        DisclosureGroup("Input & baseline") { Text(item.explanation).font(.caption).foregroundStyle(.secondary) }.font(.caption)
+      }
+    }
   }
 
   private func metricNumber(_ value: Double, title: String, unit: String) -> some View {

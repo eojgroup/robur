@@ -24,6 +24,11 @@ struct DailyHealthMetrics: Identifiable, Hashable {
   var hrv: Double? = nil
   var vo2Max: Double? = nil
   var weightKg: Double? = nil
+  var respiratoryRate: Double? = nil
+  var oxygenSaturation: Double? = nil
+  var bodyFatPercent: Double? = nil
+  var bmi: Double? = nil
+  var heightCm: Double? = nil
 }
 
 struct HealthProfile: Equatable {

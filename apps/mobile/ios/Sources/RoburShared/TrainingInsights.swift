@@ -61,6 +61,7 @@ struct InsightsSummary {
   let zones: [HeartZoneTotal]
   let currentStreak: Int
   let activeDays: Int
+  let recoveryAnalysis: RecoveryAnalysis
 }
 
 /// Transparent fitness heuristics, not validated clinical or injury-risk scores.
@@ -68,61 +69,32 @@ struct InsightsSummary {
 enum TrainingInsights {
   static func make(days: [DailyHealthMetrics], workouts: [WorkoutRecord], annotations: [String: WorkoutAnnotation],
                    maxHR: Double, now: Date = Date(), stepsGoal: Double = 8_000,
-                   exerciseGoal: Double = 30, calendar: Calendar = .current) -> InsightsSummary {
+                   exerciseGoal: Double = 30, historyStart: Date? = nil, calendar: Calendar = .current) -> InsightsSummary {
     let today = calendar.startOfDay(for: now)
     func since(_ offset: Int) -> Date { calendar.date(byAdding: .day, value: -offset, to: today) ?? today }
     let validDays = days.filter { $0.date <= now }.sorted { $0.date < $1.date }
     let recent = validDays.filter { $0.date >= since(6) }
     let previous = validDays.filter { $0.date >= since(13) && $0.date < since(6) }
-    let baseline = validDays.filter { $0.date >= since(30) && $0.date < today }
-    let monthly = validDays.filter { $0.date >= since(29) }
-    let sessions = workouts.filter { $0.start <= now && $0.minutes.isFinite && $0.minutes > 0 }
+    var seenSessions: Set<String> = []
+    let sessions = workouts.filter { $0.start <= now && $0.end <= now && $0.end >= $0.start &&
+      $0.minutes.isFinite && $0.minutes > 0 && seenSessions.insert($0.id).inserted }
     let loaded = sessions.compactMap { workout -> (WorkoutRecord, Double)? in
       guard let load = sessionLoad(for: workout, annotation: annotations[workout.id], maxHR: maxHR) else { return nil }
       return (workout, load)
     }
-    let load7 = loaded.filter { $0.0.start >= since(6) }.reduce(0) { $0 + $1.1 }
-    let load28 = loaded.filter { $0.0.start >= since(27) }.reduce(0) { $0 + $1.1 }
-    let hasPriorLoad = loaded.contains { $0.0.start >= since(27) && $0.0.start < since(6) }
+    let load7 = loaded.filter { $0.0.end >= since(6) }.reduce(0) { $0 + $1.1 }
+    let load28 = loaded.filter { $0.0.end >= since(27) }.reduce(0) { $0 + $1.1 }
+    let hasPriorLoad = loaded.contains { $0.0.end >= since(27) && $0.0.end < since(6) }
     let ratio = hasPriorLoad && load28 > 0 ? load7 / (load28 / 4) : nil
-    let loadStatus = ratio.map { $0 < 0.8 ? "Low" : ($0 > 1.3 ? "High" : "Optimal") } ?? "Building baseline"
+    let loadStatus = ratio.map { $0 < 0.8 ? "Below recent average" : ($0 > 1.3 ? "Above recent average" : "Near recent average") } ?? "Building baseline"
 
-    var readinessParts: [(InsightScore, Double)] = []
-    func addReadiness(_ title: String, key: KeyPath<DailyHealthMetrics, Double?>,
-                      weight: Double, inverse: Bool = false) {
-      guard let observation = validDays.last(where: { $0.date >= since(1) && positive($0[keyPath: key]) != nil }),
-            let current = positive(observation[keyPath: key]) else { return }
-      let observationDay = calendar.startOfDay(for: observation.date)
-      let baselineStart = calendar.date(byAdding: .day, value: -30, to: observationDay) ?? observationDay
-      let values = validDays.filter { $0.date >= baselineStart && $0.date < observationDay }
-        .compactMap { positive($0[keyPath: key]) }
-      guard values.count >= 7, let base = mean(values) else { return }
-      let deviation = inverse ? 1 - current / base : current / base - 1
-      let value = score(70 + deviation * (inverse ? 200 : 100))
-      let part = InsightScore(title: title, value: value,
-        explanation: "\(Int(weight * 100))% readiness weight; latest value \(number(current)) vs your prior 30-day average \(number(base)) (\(values.count) recorded days). Baseline maps to 70/100; \(inverse ? "lower" : "higher") relative values score higher.")
-      readinessParts.append((part, weight))
+    let analysis = RecoveryInsights.make(days: days, workouts: workouts, annotations: annotations, maxHR: maxHR,
+      now: now, historyStart: historyStart, stepsGoal: stepsGoal, exerciseGoal: exerciseGoal, calendar: calendar)
+    let readiness = analysis.score
+    let readinessParts = analysis.recoveryComponents.map { component in
+      InsightScore(title: component.title, value: component.score,
+        explanation: "\(Int((component.effectiveWeight * 100).rounded()))% effective weight · \(String(format: "%.1f", component.contribution)) points. " + component.explanation)
     }
-    addReadiness("Sleep", key: \.sleepMinutes, weight: 0.35)
-    addReadiness("HRV", key: \.hrv, weight: 0.30)
-    addReadiness("Resting HR", key: \.restingHR, weight: 0.20, inverse: true)
-    // Activity contributes only after at least two direct recovery signals are available.
-    if readinessParts.count >= 2 {
-      let activityBase = baseline.compactMap { nonnegative($0.exerciseMinutes) }
-      let activityRecent = validDays.filter { $0.date >= since(2) }.compactMap { nonnegative($0.exerciseMinutes) }
-      if activityBase.count >= 7, let average = mean(activityBase), average > 0, !activityRecent.isEmpty {
-        let activityRatio = (mean(activityRecent) ?? 0) / average
-        let value = score(70 - max(0, activityRatio - 1) * 30)
-        readinessParts.append((InsightScore(title: "Recent activity", value: value,
-          explanation: "10% readiness weight; recent exercise minutes vs your prior 30-day daily average. Above-baseline activity reduces this recovery component."), 0.10))
-      }
-      if let ratio {
-        readinessParts.append((InsightScore(title: "Recent workouts", value: score(70 - max(0, ratio - 1.1) * 40),
-          explanation: "5% readiness weight; 7-day load vs the weekly average of the last 28 days. A relative increase reduces this recovery component."), 0.05))
-      }
-    }
-    let readiness = readinessParts.count >= 2 ? weighted(readinessParts) : nil
-
     let goalDates = Set(validDays.filter {
       ($0.steps ?? -1) >= stepsGoal || ($0.exerciseMinutes ?? -1) >= exerciseGoal
     }.map { calendar.startOfDay(for: $0.date) })
@@ -130,44 +102,14 @@ enum TrainingInsights {
     let trainingDates = Set(sessions.filter { $0.start >= since(29) && $0.minutes >= 10 }
       .map { calendar.startOfDay(for: $0.start) })
     let activeDays = activeDates.union(trainingDates).count
-    var fitnessParts: [(InsightScore, Double)] = []
-    let cardio = monthly.compactMap { positive($0.vo2Max) }
-    if let current = cardio.last, let base = mean(baseline.compactMap { positive($0.vo2Max) }), cardio.count >= 2 {
-      fitnessParts.append((InsightScore(title: "Cardio", value: score(70 + (current / base - 1) * 100),
-        explanation: "25% fitness weight. Latest VO₂ max relative to your own prior 30-day average; baseline maps to 70. This is a progress score, not an age-adjusted VO₂ max percentile."), 0.25))
+    let fitnessParts = analysis.fitnessComponents.map { component in
+      InsightScore(title: component.title, value: component.score,
+        explanation: "\(Int((component.effectiveWeight * 100).rounded()))% effective weight · \(String(format: "%.1f", component.contribution)) points. " + component.explanation)
     }
-    let activity = monthly.compactMap { day -> Double? in
-      var fractions: [Double] = []
-      if let steps = nonnegative(day.steps), stepsGoal > 0 { fractions.append(min(steps / stepsGoal, 1)) }
-      if let exercise = nonnegative(day.exerciseMinutes), exerciseGoal > 0 { fractions.append(min(exercise / exerciseGoal, 1)) }
-      return mean(fractions)
-    }
-    if activity.count >= 7, let average = mean(activity) {
-      fitnessParts.append((InsightScore(title: "Activity", value: score(average * 100),
-        explanation: "25% fitness weight. Mean daily completion of your step and exercise goals over recorded days in the last 30 days (\(activity.count) days)."), 0.25))
-    }
-    if let readiness {
-      fitnessParts.append((InsightScore(title: "Recovery", value: readiness,
-        explanation: "20% fitness weight. Your available personal-baseline readiness components; missing components are excluded."), 0.20))
-    }
-    let observedDates = Set(monthly.map { calendar.startOfDay(for: $0.date) }).union(trainingDates)
-    if observedDates.count >= 14 {
-      fitnessParts.append((InsightScore(title: "Consistency", value: score(Double(activeDays) / 20 * 100),
-        explanation: "20% fitness weight. Goal: 20 active days in the last 30, where an active day meets a step/exercise target or includes at least 10 workout minutes."), 0.20))
-    }
-    let monthlySessions = sessions.filter { $0.start >= since(29) }
-    if !monthlySessions.isEmpty {
-      let strength = monthlySessions.filter {
-        $0.activityType == .traditionalStrength || $0.activityType == .functionalStrength ||
-          ($0.activityType == .other && $0.title.localizedCaseInsensitiveContains("strength"))
-      }.count
-      fitnessParts.append((InsightScore(title: "Strength", value: score(Double(strength) / 8 * 100),
-        explanation: "10% fitness weight. Eight recorded strength sessions per 30 days maps to 100; it measures participation, not strength or muscle size."), 0.10))
-    }
-    let fitness = observedDates.count >= 14 && fitnessParts.count >= 3 ? weighted(fitnessParts) : nil
+    let fitness = analysis.fitnessScore
 
     var daily: [Date: Double] = [:]
-    for (workout, load) in loaded { daily[calendar.startOfDay(for: workout.start), default: 0] += load }
+    for (workout, load) in loaded { daily[calendar.startOfDay(for: workout.end), default: 0] += load }
     let dailyLoad = daily.keys.sorted().map { DailyLoadPoint(date: $0, load: daily[$0] ?? 0) }
     let trendSpecs: [(String, String, KeyPath<DailyHealthMetrics, Double?>)] = [
       ("HRV", "ms", \.hrv), ("Resting HR", "bpm", \.restingHR), ("Cardio fitness", "mL/kg/min", \.vo2Max),
@@ -234,10 +176,10 @@ enum TrainingInsights {
     }
     let weeklySessions = sessions.filter { $0.start >= since(7) && $0.start < today }
     report.insert("Last 7 complete days: \(weeklySessions.count) workouts, \(Int(weeklySessions.reduce(0) { $0 + $1.minutes })) training minutes.", at: 0)
-    return InsightsSummary(readiness: readiness, fitness: fitness, scores: fitnessParts.map(\.0),
-      readinessComponents: readinessParts.map(\.0), load7: load7, load28: load28, loadRatio: ratio,
+    return InsightsSummary(readiness: readiness, fitness: fitness, scores: fitnessParts,
+      readinessComponents: readinessParts, load7: load7, load28: load28, loadRatio: ratio,
       loadStatus: loadStatus, dailyLoad: dailyLoad, trends: trends, records: personalRecords(days: validDays, workouts: sessions),
-      weeklyReport: report, zones: zones, currentStreak: streak, activeDays: activeDays)
+      weeklyReport: report, zones: zones, currentStreak: streak, activeDays: activeDays, recoveryAnalysis: analysis)
   }
 
   /// Apple Fitness effort is authoritative. HR-based intensity is explicitly an estimate;
