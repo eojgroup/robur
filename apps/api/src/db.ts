@@ -10,6 +10,7 @@ interface PairedDevice { deviceToken: string; expiresAt: string; userId: string 
 export interface FitnessStore {
   ping(): Promise<void>;
   authenticateDevice(hash: string): Promise<Principal | null>;
+  revokeDevice(owner: string, hash: string): Promise<void>;
   createPairing(owner: string): Promise<Pairing>;
   redeemPairing(code: string, sourceDeviceId: string, deviceName: string): Promise<PairedDevice>;
   getConsent(owner: string): Promise<HealthConsent | null>;
@@ -48,6 +49,9 @@ export class InMemoryFitnessStore implements FitnessStore {
     const code = pairCode(), expiresAt = tenMinutes();
     this.pairings.set(tokenHash(code), { owner, expiresAt });
     return { code, expiresAt };
+  }
+  async revokeDevice(owner: string, hash: string) {
+    if (this.devices.get(hash)?.ownerId === owner) this.devices.delete(hash);
   }
   async redeemPairing(code: string, sourceDeviceId: string, _deviceName: string) {
     const hash = tokenHash(code), pairing = this.pairings.get(hash);
@@ -111,6 +115,9 @@ export class PostgresFitnessStore implements FitnessStore {
     await this.pool.query("delete from health_pairing where expires_at < now()");
     await this.pool.query("insert into health_pairing(code_hash,owner_id,expires_at) values($1,$2,$3)", [tokenHash(code), owner, expiresAt]);
     return { code, expiresAt };
+  }
+  async revokeDevice(owner: string, hash: string) {
+    await this.pool.query("delete from health_sync_device where owner_id=$1 and token_hash=$2", [owner, hash]);
   }
   async redeemPairing(code: string, sourceDeviceId: string, deviceName: string): Promise<PairedDevice> {
     const client = await this.pool.connect();

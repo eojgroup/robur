@@ -134,7 +134,9 @@ Open **Robur Health → TestFlight** and confirm the build is processed and
 available to **Robur Test Group**. The distribution client retries Apple HTTP 429/5xx responses up to five
 attempts with bounded backoff, and retries transient read failures for GET
 requests. Authentication/configuration errors still fail immediately. The
-workflow waits up to 20 minutes for Apple processing. If Apple takes longer, check processing in App Store Connect before
+workflow waits up to 40 minutes for Apple processing and also checks Build Uploads
+for validation failures that occur before a build is visible. Apple rejection
+details fail the job immediately. If Apple takes longer, check processing in App Store Connect before
 releasing again; a new dispatch uses a new build number. Failed/invalid builds
 and failed group assignment are errors, not successful releases. Archive/export
 diagnostics are retained in the run's artifacts for 14 days.

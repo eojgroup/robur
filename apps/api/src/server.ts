@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type ApiConfig } from "./config.js";
 import type { FitnessStore } from "./db.js";
-import { createAuthenticator, type Authenticator, type Principal } from "./auth.js";
+import { createAuthenticator, tokenHash, type Authenticator, type Principal } from "./auth.js";
 import { HttpError, object, parseConsent, parseSyncBatch, text } from "./health-cloud.js";
 
 export function createServer(config: ApiConfig, store: FitnessStore, authenticate: Authenticator = createAuthenticator(config.googleWebClientId, store)): Express {
@@ -86,6 +86,14 @@ export function createServer(config: ApiConfig, store: FitnessStore, authenticat
   app.delete("/api/health/data", auth, async (_req, res, next) => {
     try { await store.deleteHealthData(principal(res).ownerId); res.status(204).end(); }
     catch (error) { next(error); }
+  });
+  app.delete("/api/health/device", auth, async (req, res, next) => {
+    try {
+      const identity = principal(res);
+      if (identity.kind !== "device") throw new HttpError(403, "Disconnect this device using its own connection.");
+      await store.revokeDevice(identity.ownerId, tokenHash(req.header("authorization")!.slice(7)));
+      res.status(204).end();
+    } catch (error) { next(error); }
   });
   app.post("/api/health/sync", auth, async (req, res, next) => {
     try {

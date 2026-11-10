@@ -153,7 +153,7 @@ struct FitnessHistoryView: View {
     scoreAnalysis = RecoveryInsights.make(days: healthKit.dailyMetrics, workouts: healthKit.analyticsWorkouts,
       annotations: journal.annotations, maxHR: maxHR,
       historyStart: healthKit.analyticsHistoryStart, stepsGoal: stepsGoal,
-      exerciseGoal: exerciseGoal)
+      exerciseGoal: exerciseGoal, fitnessReference: healthKit.fitnessReference)
     timeline = TrainingTimeline.make(workouts: healthKit.workouts, days: healthKit.dailyMetrics,
       signal: signal, grain: grain, start: healthKit.historyRange.startDate())
   }

@@ -88,4 +88,17 @@ final class RecoveryInsightsTests: XCTestCase {
     XCTAssertLessThan(overloaded.score ?? 100, baseline.score ?? 0)
     XCTAssertEqual(overloaded.loadCoverage, 1)
   }
+
+  func testFixedFitnessReferenceSurvivesDisplayRangeChangesAndNeverLeaksIntoEarlierDates() {
+    let reference = FitnessReference(value: 40, establishedAt: day(40))
+    let workouts = (1...10).map { workout("s\($0)", daysAgo: $0 * 2) }
+    let full = RecoveryInsights.make(days: days(), workouts: workouts, annotations: [:], maxHR: 190,
+      now: now, fitnessReference: reference, calendar: calendar)
+    let short = RecoveryInsights.make(days: days().filter { $0.date >= day(35) }, workouts: workouts,
+      annotations: [:], maxHR: 190, now: now, fitnessReference: reference, calendar: calendar)
+    XCTAssertEqual(full.fitnessScore, short.fitnessScore)
+    XCTAssertEqual(full.fitnessComponents.first { $0.key == "cardio" }?.baseline, 40)
+    let early = full.history.filter { $0.date < reference.establishedAt }
+    XCTAssertTrue(early.allSatisfy { $0.fitnessComponents.allSatisfy { $0.key != "cardio" } })
+  }
 }

@@ -1,4 +1,11 @@
-# Low-cost private health cloud
+# Prepared private health cloud
+
+Google deployments are paused at the user's request. GKE remains the selected
+future platform; the Cloud Run files below are an unselected cost comparison,
+not authorization to provision resources. The cloud workflow validates only
+and has no deployment job. Both repository and production-environment
+`GCP_DEPLOYMENTS_ENABLED` variables are `false`.
+
 
 ## Deployment choice and budget
 
@@ -139,21 +146,16 @@ and rejects different audiences. Pair the native app through the web account's
 one-time code, choose data categories, and explicitly enable sync. Health data
 must remain local before that choice.
 
-## Subsequent application releases
+## Resuming deployment later
 
-After the initial reviewed infrastructure rollout, set GitHub's production
-variables `GCP_DEPLOYMENT_PLATFORM=cloud-run` and `GCP_DEPLOYMENTS_ENABLED=true`,
-along with the existing project, region and GitHub Workload Identity variables.
-The GitHub deploy identity needs Artifact Registry writer, Cloud Run admin and
-service-account impersonation for the runtime/migration accounts, not permanent
-database-administrator credentials.
+GKE preparation remains in `infra/gcp/terraform` and `infra/k8s`. A dedicated
+regional cluster plus PostgreSQL cannot fit the current $25/month ceiling.
+Do not apply this configuration until the user revisits the budget and explicitly
+resumes Google deployments. The existing GKE and Terraform workflows require a
+manual dispatch, `GCP_DEPLOYMENT_PLATFORM=gke`, and the deployment gate enabled.
+The Cloud Run alternative is not selected and has no deployment workflow.
 
-**Validate and deploy low-cost health cloud** validates on relevant pushes;
-deploying requires an explicit workflow dispatch with `deploy_production=true`.
-It pushes an immutable combined image, executes migrations before replacing the
-live service image, retains the zero-to-one instance envelope, and verifies the
-HTTPS/authentication boundary. It does not reapply Terraform or create GKE.
-
-Legacy GKE and Terraform workflows require `GCP_DEPLOYMENT_PLATFORM=gke`, the
-deployment opt-in, and an explicit dispatch. Merely enabling Cloud Run deployment
-cannot trigger the old expensive stack.
+Google OAuth client configuration, schema migration and real PostgreSQL integration
+must be verified before enabling the web service. Native web sync is disabled in
+this release while the backend remains undeployed. Backend and web tests run locally
+and in credential-free CI; they do not provision Google resources.

@@ -1,5 +1,10 @@
 import Foundation
 
+struct FitnessReference: Codable, Equatable {
+  let value: Double?
+  let establishedAt: Date
+}
+
 struct RecoveryScoreComponent: Identifiable, Codable, Equatable {
   var id: String { key }
   let key: String
@@ -27,7 +32,7 @@ struct RecoveryHistoryPoint: Identifiable, Codable, Equatable {
 }
 
 struct RecoveryAnalysis: Codable, Equatable {
-  static let version = "robur-recovery-2.0"
+  static let version = "robur-recovery-2.1"
   let methodologyVersion: String
   let date: Date
   let score: Int?
@@ -54,7 +59,8 @@ enum RecoveryInsights {
 
   static func make(days: [DailyHealthMetrics], workouts: [WorkoutRecord], annotations: [String: WorkoutAnnotation],
                    maxHR: Double, now: Date = Date(), historyStart: Date? = nil, stepsGoal: Double = 8_000,
-                   exerciseGoal: Double = 30, calendar: Calendar = .current) -> RecoveryAnalysis {
+                   exerciseGoal: Double = 30, fitnessReference: FitnessReference? = nil,
+                   calendar: Calendar = .current) -> RecoveryAnalysis {
     let today = calendar.startOfDay(for: now)
     // One imported daily aggregate per calendar day; repeated input must not
     // inflate baseline coverage. Prefer the later aggregate for the same day.
@@ -99,7 +105,13 @@ enum RecoveryInsights {
       let age = max(0, calendar.dateComponents([.day], from: loadHistoryStart, to: dayCursor).day ?? 0)
       let result = recoveryParts(days: recentDays, sessions: recentSessions, annotations: annotations, maxHR: maxHR,
         date: dayCursor, cutoff: cutoff, acute: acute, chronic: chronic, historyDays: age, calendar: calendar)
-      let fitness = fitnessParts(days: recentDays, sessions: recentSessions, anchor: anchorValues.count >= 2 ? mean(anchorValues) : nil,
+      let anchor: Double?
+      if let fitnessReference {
+        anchor = cutoff >= fitnessReference.establishedAt ? positive(fitnessReference.value) : nil
+      } else {
+        anchor = anchorValues.count >= 2 ? mean(anchorValues) : nil
+      }
+      let fitness = fitnessParts(days: recentDays, sessions: recentSessions, anchor: anchor,
         date: dayCursor, stepsGoal: stepsGoal, exerciseGoal: exerciseGoal, calendar: calendar)
       let recoveryComponents = components(result.parts)
       let fitnessComponents = components(fitness.parts)

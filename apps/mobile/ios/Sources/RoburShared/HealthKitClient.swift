@@ -23,6 +23,7 @@ final class HealthKitClient: ObservableObject {
   @Published private(set) var fitnessReadings: [FitnessReading] = []
   @Published private(set) var dailyMetrics: [DailyHealthMetrics] = []
   @Published private(set) var profile = HealthProfile()
+  @Published private(set) var fitnessReference = FitnessReference(value: nil, establishedAt: .distantFuture)
   @Published private(set) var workoutDetailsLoading: Set<String> = []
   @Published private(set) var workoutDetailsError: String?
   private var rawWorkouts: [String: HKWorkout] = [:]
@@ -423,8 +424,12 @@ extension HealthKitClient {
     // Include a prior baseline before the visible range for sleep/HRV comparisons.
     let contextStart = Calendar.current.date(byAdding: .day, value: -31, to: visibleStart) ?? visibleStart
     let healthStart = max(store.earliestPermittedSampleDate(), min(contextStart, baselineStart))
+    // Keep training impulses independent of the displayed chart range: resetting
+    // a 42-day EWMA when the range changes would also change today's recovery.
+    let workoutStart = await earliestHistorySample(type: HKObjectType.workoutType(), now: now) ?? healthStart
     do {
-      async let workoutSamples = historySamples(type: HKObjectType.workoutType(), start: healthStart, end: now)
+      async let workoutSamples = historySamples(type: HKObjectType.workoutType(), start: workoutStart, end: now)
+      async let referenceResult = readFitnessReference(now: now)
       async let healthHistory = readDailyHealth(from: healthStart, to: now)
       async let userProfile = readProfile(now: now)
       async let effort = readWorkoutEffort()
@@ -432,6 +437,7 @@ extension HealthKitClient {
       let history = await healthHistory
       let profileResult = await userProfile
       let effortResult = await effort
+      let reference = await referenceResult
       let effortScores = effortResult.values
       guard historyRequest == request else { return }
       let imported = samples.compactMap { $0 as? HKWorkout }
@@ -441,7 +447,8 @@ extension HealthKitClient {
       loadedWorkoutDetails = []
       effortCandidates = effortResult.candidates
       effortImportError = effortResult.error
-      analyticsHistoryStart = healthStart
+      analyticsHistoryStart = workoutStart
+      fitnessReference = reference
       analyticsWorkouts = imported.map { workout in
         let heartType = HKQuantityType.quantityType(forIdentifier: .heartRate)!
         let energyType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned)!
@@ -498,6 +505,19 @@ extension HealthKitClient {
         guard gate.claim() else { return }; healthStore.stop(query); continuation.resume(returning: nil)
       }
     }
+  }
+
+  private func readFitnessReference(now: Date) async -> FitnessReference {
+    let unavailable = FitnessReference(value: nil, establishedAt: .distantFuture)
+    guard let type = HKObjectType.quantityType(forIdentifier: .vo2Max),
+      let first = await earliestHistorySample(type: type, now: now),
+      let end = Calendar.current.date(byAdding: .day, value: 28, to: Calendar.current.startOfDay(for: first)) else { return unavailable }
+    guard end <= now else { return FitnessReference(value: nil, establishedAt: end) }
+    guard let samples = try? await historySamples(type: type, start: first, end: end) else { return unavailable }
+    let values = samples.compactMap { ($0 as? HKQuantitySample)?.quantity.doubleValue(for: HKUnit(from: "ml/kg*min")) }
+      .filter { $0.isFinite && $0 > 0 }
+    guard values.count >= 2 else { return unavailable }
+    return FitnessReference(value: values.reduce(0, +) / Double(values.count), establishedAt: end)
   }
 
   func refreshHealthAuthorizationReview() async {

@@ -12,6 +12,7 @@ require "openssl"
 require "uri"
 
 require_relative "app_store_connect_http"
+require_relative "testflight_build_waiter"
 
 def required_environment(name)
   value = ENV[name].to_s.strip
@@ -71,23 +72,14 @@ if ARGV.include?("--preflight")
   exit 0
 end
 
-build = nil
-40.times do |attempt|
-  token = app_store_connect_jwt(key_id: key_id, issuer_id: issuer_id, private_key_path: private_key_path)
-  path = "/v1/builds?filter%5Bapp%5D=#{app_store_connect_app_id}&filter%5Bversion%5D=#{URI.encode_www_form_component(build_number)}&sort=-uploadedDate&limit=1"
-  candidate = request_json(:get, path, token).fetch("data", []).first
-  state = candidate&.dig("attributes", "processingState")
-  if candidate && state == "VALID"
-    build = candidate
-    break
-  end
-
-  abort "Uploaded build #{build_number} entered processing state #{state}" if candidate && ["FAILED", "INVALID"].include?(state)
-
-  warn "Waiting for TestFlight processing (attempt #{attempt + 1}/40, state #{state || "not visible"})"
-  sleep 30
+begin
+  build = TestFlightBuildWaiter.new(requester: lambda { |path|
+    refreshed_token = app_store_connect_jwt(key_id: key_id, issuer_id: issuer_id, private_key_path: private_key_path)
+    request_json(:get, path, refreshed_token)
+  }).wait(app_id: app_store_connect_app_id, build_number: build_number)
+rescue TestFlightBuildWaiter::ProcessingError => error
+  abort error.message
 end
-abort "Build #{build_number} did not finish TestFlight processing within 20 minutes" unless build
 
 if group.dig("attributes", "hasAccessToAllBuilds") == true
   puts "Build #{build_number} is available to #{group_name} through automatic access."

@@ -8,6 +8,10 @@ introduced.
 
 Apple/TestFlight is the active release path. Google Cloud deployments are
 paused behind `GCP_DEPLOYMENTS_ENABLED` and an explicit manual dispatch.
+Google deployment remains on hold at the user's request. GKE is the selected
+future platform; Cloud Run is only an unselected cost proposal. Cloud CI validates
+configuration without deploying, and native web sync is disabled in this release.
+Recovery and fitness now share a [versioned methodology](docs/recovery-methodology.md).
 See [Apple release setup](docs/apple-testflight-release.md) for the remaining
 account tasks. Existing GCP resources are not deleted by this pause.
 

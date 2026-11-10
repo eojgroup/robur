@@ -144,7 +144,8 @@ struct HealthOverviewView: View {
 
   private func recalculate() {
     cachedSummary = TrainingInsights.make(days: healthKit.dailyMetrics, workouts: healthKit.analyticsWorkouts,
-      annotations: journal.annotations, maxHR: maxHR, stepsGoal: stepsGoal, exerciseGoal: exerciseGoal, historyStart: healthKit.analyticsHistoryStart)
+      annotations: journal.annotations, maxHR: maxHR, stepsGoal: stepsGoal, exerciseGoal: exerciseGoal,
+      historyStart: healthKit.analyticsHistoryStart, fitnessReference: healthKit.fitnessReference)
   }
 
 

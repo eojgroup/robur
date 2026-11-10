@@ -33,7 +33,7 @@ struct HealthSyncRecord: Codable, Equatable {
   let data: [String: HealthSyncValue]
 }
 
-struct HealthSyncBatch: Codable {
+struct HealthSyncBatch: Encodable {
   let schemaVersion = 1
   let sourceDeviceId: String
   let capturedAt: Date

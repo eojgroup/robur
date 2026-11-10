@@ -48,7 +48,7 @@ private final class HealthSyncRedirectPolicy: NSObject, URLSessionTaskDelegate {
 }
 
 enum CloudHealthSyncError: LocalizedError {
-  case endpoint, connection, consent, unavailable(Int), keychain, history
+  case endpoint, connection, consent, unavailable(Int), keychain, history, deploymentPaused
   var errorDescription: String? {
     switch self {
     case .endpoint: return "Enter the HTTPS origin of your Robur dashboard, without a path, password or query."
@@ -61,6 +61,7 @@ enum CloudHealthSyncError: LocalizedError {
       return "The server could not complete the request (HTTP \(status)). No retry will start automatically."
     case .keychain: return "The device could not securely read or save the connection. Unlock it and retry."
     case .history: return "Health history did not finish loading. Refresh Health access and retry."
+    case .deploymentPaused: return "Web sync is paused while the cloud service is undeployed. Health data remains on this device."
     }
   }
 }
@@ -68,6 +69,7 @@ enum CloudHealthSyncError: LocalizedError {
 @MainActor
 final class CloudHealthSync: ObservableObject {
   static let shared = CloudHealthSync()
+  static var deploymentEnabled: Bool { Bundle.main.object(forInfoDictionaryKey: "RoburCloudSyncEnabled") as? Bool == true }
   @Published var serverOrigin = "https://robur.fit"
   @Published private(set) var connected = false
   @Published private(set) var uploading = false
@@ -89,6 +91,10 @@ final class CloudHealthSync: ObservableObject {
     configuration.timeoutIntervalForRequest = 45
     configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
     session = URLSession(configuration: configuration, delegate: HealthSyncRedirectPolicy(), delegateQueue: nil)
+    guard Self.deploymentEnabled else {
+      status = CloudHealthSyncError.deploymentPaused.localizedDescription
+      return
+    }
     do {
       if let data = try HealthSyncKeychain.read() {
         let saved = try JSONDecoder().decode(HealthSyncConnection.self, from: data)
@@ -101,7 +107,7 @@ final class CloudHealthSync: ObservableObject {
 
   static func origin(_ text: String) throws -> URL {
     guard let parts = URLComponents(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
-      parts.scheme?.lowercased() == "https", parts.host != nil, parts.user == nil, parts.password == nil,
+      parts.scheme?.lowercased() == "https", let host = parts.host, !host.isEmpty, parts.user == nil, parts.password == nil,
       parts.query == nil, parts.fragment == nil, parts.path.isEmpty || parts.path == "/",
       let url = parts.url else { throw CloudHealthSyncError.endpoint }
     return url
@@ -233,7 +239,8 @@ final class CloudHealthSync: ObservableObject {
         annotations: journal.annotations, maxHR: defaults.object(forKey: "RoburMaxHeartRate") as? Double ?? 190,
         historyStart: health.analyticsHistoryStart,
         stepsGoal: defaults.object(forKey: "RoburStepsGoal") as? Double ?? 8000,
-        exerciseGoal: defaults.object(forKey: "RoburExerciseGoal") as? Double ?? 30)
+        exerciseGoal: defaults.object(forKey: "RoburExerciseGoal") as? Double ?? 30,
+        fitnessReference: health.fitnessReference)
       let records = try HealthSyncExport.make(days: health.dailyMetrics, workouts: health.workouts,
         readings: health.fitnessReadings, annotations: journal.annotations, analysis: analysis,
         includeReviews: workoutReviews, includeDetails: detailedSamples)
@@ -254,6 +261,7 @@ final class CloudHealthSync: ObservableObject {
 
   private func request(origin: URL, path: String, method: String = "GET", token: String? = nil,
                        body: [String: HealthSyncValue]? = nil, encodedBody: Data? = nil) async throws -> Data {
+    guard Self.deploymentEnabled else { throw CloudHealthSyncError.deploymentPaused }
     guard let url = URL(string: path, relativeTo: origin)?.absoluteURL else { throw CloudHealthSyncError.endpoint }
     var request = URLRequest(url: url)
     request.httpMethod = method

@@ -27,3 +27,6 @@ infra/gcp/terraform/*.tfvars
 !infra/gcp/terraform/*.tfvars.example
 .ci-repair/
 gha-creds-*.json
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*

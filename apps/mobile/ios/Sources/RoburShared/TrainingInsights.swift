@@ -69,7 +69,8 @@ struct InsightsSummary {
 enum TrainingInsights {
   static func make(days: [DailyHealthMetrics], workouts: [WorkoutRecord], annotations: [String: WorkoutAnnotation],
                    maxHR: Double, now: Date = Date(), stepsGoal: Double = 8_000,
-                   exerciseGoal: Double = 30, historyStart: Date? = nil, calendar: Calendar = .current) -> InsightsSummary {
+                   exerciseGoal: Double = 30, historyStart: Date? = nil, fitnessReference: FitnessReference? = nil,
+                   calendar: Calendar = .current) -> InsightsSummary {
     let today = calendar.startOfDay(for: now)
     func since(_ offset: Int) -> Date { calendar.date(byAdding: .day, value: -offset, to: today) ?? today }
     let validDays = days.filter { $0.date <= now }.sorted { $0.date < $1.date }
@@ -89,7 +90,8 @@ enum TrainingInsights {
     let loadStatus = ratio.map { $0 < 0.8 ? "Below recent average" : ($0 > 1.3 ? "Above recent average" : "Near recent average") } ?? "Building baseline"
 
     let analysis = RecoveryInsights.make(days: days, workouts: workouts, annotations: annotations, maxHR: maxHR,
-      now: now, historyStart: historyStart, stepsGoal: stepsGoal, exerciseGoal: exerciseGoal, calendar: calendar)
+      now: now, historyStart: historyStart, stepsGoal: stepsGoal, exerciseGoal: exerciseGoal,
+      fitnessReference: fitnessReference, calendar: calendar)
     let readiness = analysis.score
     let readinessParts = analysis.recoveryComponents.map { component in
       InsightScore(title: component.title, value: component.score,
