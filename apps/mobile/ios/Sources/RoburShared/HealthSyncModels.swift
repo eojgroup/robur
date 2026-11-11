@@ -107,6 +107,7 @@ enum HealthSyncExport {
       data["title"] = .string(workout.title); data["activityType"] = .string(workout.activityType.rawValue)
       data["start"] = try encoded(workout.start); data["end"] = try encoded(workout.end)
       data["source"] = .string(workout.source); data["date"] = .string(dateKey(workout.start))
+      data["endDate"] = .string(dateKey(workout.end))
       if let effortSource = workout.effortSource { data["effortSource"] = .string(effortSource.rawValue) }
       if includeReviews, let annotation = annotations[workout.id] {
         data["review"] = try encoded(annotation)

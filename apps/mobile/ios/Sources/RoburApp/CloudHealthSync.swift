@@ -70,7 +70,7 @@ enum CloudHealthSyncError: LocalizedError {
 final class CloudHealthSync: ObservableObject {
   static let shared = CloudHealthSync()
   static var deploymentEnabled: Bool { Bundle.main.object(forInfoDictionaryKey: "RoburCloudSyncEnabled") as? Bool == true }
-  @Published var serverOrigin = "https://robur.fit"
+  @Published var serverOrigin = Bundle.main.object(forInfoDictionaryKey: "RoburCloudSyncOrigin") as? String ?? ""
   @Published private(set) var connected = false
   @Published private(set) var uploading = false
   @Published private(set) var working = false

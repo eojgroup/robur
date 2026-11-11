@@ -7,6 +7,7 @@ private enum OverviewGraph: String, CaseIterable, Identifiable {
 }
 
 struct FitnessHistoryView: View {
+  var embedded = false
   @EnvironmentObject private var healthKit: HealthKitClient
   @EnvironmentObject private var journal: WorkoutJournal
   @Environment(\.dynamicTypeSize) private var typeSize
@@ -65,7 +66,12 @@ struct FitnessHistoryView: View {
   }
 
   var body: some View {
-    NavigationStack {
+    Group {
+      if embedded { content }
+      else { NavigationStack { content } }
+    }
+  }
+  private var content: some View {
       ScrollView {
         VStack(alignment: .leading, spacing: 16) {
           timelineCard
@@ -146,7 +152,6 @@ struct FitnessHistoryView: View {
             .toolbar { Button("Done") { showingEvents = false } }
         }
       }
-    }
   }
 
   private func recalculate() {

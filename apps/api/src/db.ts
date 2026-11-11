@@ -89,7 +89,7 @@ export class InMemoryFitnessStore implements FitnessStore {
     const all = [...(this.data.get(owner)?.values() ?? [])].map(item => item.record);
     const counts: HealthDashboard["counts"] = {};
     for (const record of all) counts[record.kind] = (counts[record.kind] ?? 0) + 1;
-    const visible = all.filter(record => record.observedAt >= since && !["quantity", "sleep"].includes(record.kind))
+    const visible = all.filter(record => record.observedAt >= since && !["quantity", "sleep", "fitness"].includes(record.kind))
       .sort((a, b) => a.observedAt.localeCompare(b.observedAt) || a.id.localeCompare(b.id));
     return { records: visible.slice(-10000).map(compactRecord), counts, consent: await this.getConsent(owner),
       lastSyncedAt: this.lastSync.get(owner) ?? null, truncated: visible.length > 10000 };
@@ -103,6 +103,7 @@ export class PostgresFitnessStore implements FitnessStore {
       connectionTimeoutMillis: 10000, statement_timeout: 20000 });
   }
   async ping() { await this.pool.query("select 1"); }
+  async close() { await this.pool.end(); }
   async authenticateDevice(hash: string): Promise<Principal | null> {
     const result = await this.pool.query<{ owner_id: string; source_device_id: string }>(
       "select owner_id, source_device_id from health_sync_device where token_hash = $1 and expires_at > now()", [hash]);
@@ -178,7 +179,7 @@ export class PostgresFitnessStore implements FitnessStore {
     const [records, counts, account, consent] = await Promise.all([
       this.pool.query<{ record_kind: HealthRecordKind; record_id: string; observed_at: Date; payload: HealthRecord["data"] }>(
         `select record_kind,record_id,observed_at,payload - 'heartRateSamples' - 'rawSamples' - 'samples' as payload from health_record
-         where owner_id=$1 and observed_at >= $2 and record_kind not in ('quantity','sleep') order by observed_at desc,record_id limit 10001`, [owner, since]),
+         where owner_id=$1 and observed_at >= $2 and record_kind not in ('quantity','sleep','fitness') order by observed_at desc,record_id limit 10001`, [owner, since]),
       this.pool.query<{ record_kind: HealthRecordKind; count: string }>("select record_kind,count(*) from health_record where owner_id=$1 group by record_kind", [owner]),
       this.pool.query<{ last_synced_at: Date | null }>("select last_synced_at from health_account where owner_id=$1", [owner]), this.getConsent(owner)
     ]);

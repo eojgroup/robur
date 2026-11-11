@@ -293,12 +293,12 @@ resource "google_cloud_run_v2_job" "migrate" {
 
 resource "google_billing_budget" "robur" {
   billing_account = var.billing_account_id
-  display_name    = "Robur beta $25 per month"
+  display_name    = "Robur beta USD ${var.monthly_budget_usd} planning ceiling"
   budget_filter { projects = ["projects/${data.google_project.current.number}"] }
   amount {
     specified_amount {
-      currency_code = "USD"
-      units         = tostring(var.monthly_budget_usd)
+      currency_code = var.billing_currency
+      units         = tostring(floor(var.monthly_budget_usd * (var.billing_currency == "SEK" ? 8 : 1)))
     }
   }
   dynamic "threshold_rules" {

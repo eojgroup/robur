@@ -23,7 +23,9 @@
   <key>ITSAppUsesNonExemptEncryption</key>
   <false/>
   <key>RoburCloudSyncEnabled</key>
-  <false/>
+  <true/>
+  <key>RoburCloudSyncOrigin</key>
+  <string>https://robur-health-ydne76eqcq-nw.a.run.app</string>
   <key>LSRequiresIPhoneOS</key>
   <true/>
   <key>NSHealthUpdateUsageDescription</key>

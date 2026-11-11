@@ -45,7 +45,7 @@ struct RecoveryAnalysis: Codable, Equatable {
   let baselineDays: Int
   let loadCoverage: Double?
   let sleepDebtMinutes: Double?
-  var confidence: String { coverage >= 0.8 && baselineDays >= 21 ? "Established coverage" : coverage >= 0.5 ? "Partial coverage" : "Limited coverage" }
+  var confidence: String { coverage + 1e-9 >= 0.8 && baselineDays >= 21 ? "Established coverage" : coverage + 1e-9 >= 0.5 ? "Partial coverage" : "Limited coverage" }
 }
 
 /// Robur's versioned, descriptive wellness model. Research informs the inputs,

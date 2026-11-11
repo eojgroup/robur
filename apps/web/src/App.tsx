@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ArrowLeft, CalendarDays, ChevronRight, CloudUpload, HeartPulse, Link2, LockKeyhole, LogOut, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 import { healthConsentVersion, type HealthDashboard, type HealthRecord } from "@robur/core";
+import { AnalyticsWorkspace } from "./AnalyticsWorkspace";
+import { exampleRecords } from "./example";
 import { components, day, groupPoints, number, points, workoutLoad, type Point, type Series } from "./data";
 
 interface GoogleAPI { accounts: { id: { initialize(config: { client_id: string; callback(response: { credential: string }): void }): void; renderButton(element: HTMLElement, config: Record<string, unknown>): void; disableAutoSelect(): void } } }
@@ -46,6 +48,8 @@ function GoogleSignIn({ clientId, onToken }: { clientId: string; onToken(token: 
 
 function App() {
   const [token, setToken] = useState<string>();
+  const [example, setExample] = useState(false);
+  const demonstration=useMemo(()=>exampleRecords(),[]);
   const [config, setConfig] = useState<{ googleWebClientId: string | null }>();
   const [dashboard, setDashboard] = useState<HealthDashboard>();
   const [days, setDays] = useState("90");
@@ -104,10 +108,10 @@ function App() {
   return <div className="appShell">
     <header className="topbar"><Brand /><div className="topbarActions"><a href="/privacy" className="quietLink"><ShieldCheck size={16} />Privacy</a>{token && <button className="iconButton" onClick={signOut} aria-label="Sign out"><LogOut size={18} /></button>}</div></header>
     <main>
-      {!token ? <section className="welcome panel"><div className="eyebrow"><LockKeyhole size={16} />Private by choice</div><h1>Your health.<br /><span>The bigger picture.</span></h1><p>Recovery, fitness and training in one place. Connect the Apple Health data you choose from Robur, then explore the same scores and their contributing signals here.</p>
+      {!token ? <><section className="welcome panel"><div className="eyebrow"><LockKeyhole size={16} />Private by choice</div><h1>Your health.<br /><span>The bigger picture.</span></h1><p>Recovery, fitness and training in one place. Connect the Apple Health data you choose from Robur, then explore the same scores and their contributing signals here.</p>
         {config?.googleWebClientId ? <GoogleSignIn clientId={config.googleWebClientId} onToken={setToken} /> : <div className="setupNotice"><strong>{config ? "Sign-in setup is pending" : "Connecting…"}</strong><p>{config ? "The deployment needs a Google web OAuth client before accounts can connect. Health uploads remain locked." : "Checking the secure connection."}</p></div>}
-        <div className="welcomeFacts"><span><ShieldCheck size={17} />No public health profiles</span><span><HeartPulse size={17} />Apple Health stays in your control</span><span><CloudUpload size={17} />Upload only when you choose</span></div>
-      </section> : <>
+        <button onClick={()=>setExample(value=>!value)}>{example ? "Close analytics example" : "Explore analytics with example data"}</button><div className="welcomeFacts"><span><ShieldCheck size={17} />No public health profiles</span><span><HeartPulse size={17} />Apple Health stays in your control</span><span><CloudUpload size={17} />Upload only when you choose</span></div>
+      </section>{example && <section className="panel"><p className="exampleNotice"><strong>Synthetic example — not your Health data.</strong> These generated records stay in this browser and are never uploaded.</p><AnalyticsWorkspace records={demonstration} selectedDate={selectedDate} onSelect={setSelectedDate}/></section>}</> : <>
         <section className="dashboardIntro"><div><p className="eyebrow">Your private dashboard</p><h1>See how it connects.</h1><p>{dashboard?.lastSyncedAt ? `Last upload ${new Date(dashboard.lastSyncedAt).toLocaleString()}` : "Connect Robur to bring your approved Health history here."}</p></div><div className="actions"><button onClick={() => void act(async () => setPairing(await request("/api/pairings", token, { method: "POST" })))} disabled={busy}><Link2 size={17} />Connect device</button><button className="iconButton" onClick={() => setRefresh(value => value+1)} aria-label="Refresh dashboard" disabled={loading}><RefreshCw size={17} className={loading ? "spinning" : ""} /></button><button onClick={() => setShowSettings(true)}>Data controls</button></div></section>
         <section className="scoreSummary" aria-label="Current scores">
           <Score label="Recovery & readiness" value={number(latest?.data.recovery)} detail="One combined daily recovery score" />
@@ -115,12 +119,21 @@ function App() {
           <div className="metricSummary"><span>Dataset</span><strong>{Object.values(dashboard?.counts ?? {}).reduce((sum,count)=>sum+(count??0),0).toLocaleString()}</strong><small>records you chose to upload</small></div>
           <div className="metricSummary"><span>Coverage</span><strong>{dashboard?.counts.daily ?? 0}<small> days</small></strong><small>{dashboard?.counts.workout ?? 0} workouts · {dashboard?.counts.fitness ?? 0} fitness readings</small></div>
         </section>
+        <section className="panel chartPanel">
+          <div className="panelHeading"><div><p className="eyebrow">Your analytics workspace</p><h2>Explore the numbers together.</h2></div>
+            <div className="controls"><label>Range<select value={days} onChange={e=>{setDays(e.target.value);setSelectedDate(undefined);}}><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option><option value="all">All uploaded</option></select></label><label>Period<select value={grain} onChange={e=>setGrain(e.target.value as typeof grain)}><option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option></select></label></div>
+          </div>
+          {loading?<div className="loadingState">Reading your private dataset…</div>:<AnalyticsWorkspace records={records} selectedDate={selectedDate} onSelect={setSelectedDate} grain={grain}/>}
+          {dashboard?.truncated && <p className="notice">Showing the latest 10,000 summaries. Choose a shorter range to inspect every record in that range.</p>}
+        </section>
+        <details className="focusedCharts"><summary>Individual metric charts</summary>
         <section className="panel chartPanel"><div className="panelHeading"><div><p className="eyebrow">Explore your history</p><h2>{view === "recovery" ? "Recovery is more than sleep." : view === "fitness" ? "Fitness, over time." : view === "load" ? "Training and recovery demand." : view === "activity" ? "Your everyday movement." : "Body measurements."}</h2></div><div className="controls"><label>Range<select value={days} onChange={e=>{setDays(e.target.value);setSelectedDate(undefined);}}><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option><option value="all">All uploaded</option></select></label><label>Period<select value={grain} onChange={e=>setGrain(e.target.value as typeof grain)}><option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option></select></label><label>Chart<select value={chartStyle} onChange={e=>setChartStyle(e.target.value as typeof chartStyle)}><option value="line">Lines</option><option value="bar">Bars</option></select></label></div></div>
           <div className="segmented" role="group" aria-label="Health graph"><button aria-pressed={view==="recovery"} onClick={()=>setView("recovery")}>Recovery</button><button aria-pressed={view==="fitness"} onClick={()=>setView("fitness")}>Fitness</button><button aria-pressed={view==="load"} onClick={()=>setView("load")}>Load</button><button aria-pressed={view==="activity"} onClick={()=>setView("activity")}>Activity</button><button aria-pressed={view==="body"} onClick={()=>setView("body")}>Body</button></div>
           {!records.length ? <div className="emptyState"><CloudUpload size={32} /><h3>Your data starts here.</h3><p>Connect a device, review the data categories, then upload from Robur. No example scores are substituted for missing Health readings.</p></div> : <div className="graphGrid">{series.map(item=><DataChart key={item.key} series={item} style={chartStyle} selected={selectedDate} onSelect={setSelectedDate} grain={grain} score={item.unit==="/100"} />)}</div>}
           <p className="chartFootnote">{grain === "day" ? "Recorded dates only." : "Score and vital signs use recorded-date means; movement and session load use totals."} Separate scales preserve units. Select a point for its date; gaps and absent readings remain visible. Scores use their uploaded methodology version.</p>
           {dashboard?.truncated && <p className="notice">This view contains the latest 10,000 summaries. Select a shorter range for a complete chart. Your other uploaded records remain stored.</p>}
         </section>
+        </details>
         <div className="detailGrid"><section className="panel"><div className="panelHeading"><div><p className="eyebrow">What builds the score</p><h2>{selectedScore ? new Date(`${day(selectedScore)}T12:00:00`).toLocaleDateString(undefined,{dateStyle:"medium"}) : "Waiting for a recovery score"}</h2></div><HeartPulse size={23} /></div><ComponentBreakdown record={selectedScore} />
           <p className="chartFootnote">Methodology: {typeof selectedScore?.data.methodologyVersion === "string" ? selectedScore.data.methodologyVersion : "Not uploaded"}. This is a transparent Robur estimate, not a diagnostic or an injury prediction.</p></section>
           <section className="panel"><div className="panelHeading"><div><p className="eyebrow">Selected period</p><h2>{selectedDate ? new Date(`${selectedDate}T12:00:00`).toLocaleDateString(undefined,{dateStyle:"medium"}) : "Latest readings"}</h2></div><CalendarDays size={22} /></div><dl className="readingList">{[["Sleep", "sleepMinutes", "min"],["HRV · SDNN","hrv","ms"],["Resting HR","restingHR","bpm"],["Steps","steps","steps"],["Exercise","exerciseMinutes","min"],["Weight","weightKg","kg"]].map(([label,key,unit])=><div key={key}><dt>{label}</dt><dd>{number(selectedDaily?.data[key])?.toLocaleString(undefined,{maximumFractionDigits:1}) ?? "—"}<small> {unit}</small></dd></div>)}</dl></section></div>

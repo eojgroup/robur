@@ -72,7 +72,7 @@ struct RoburRootView: View {
   @State private var selectedTab = 0
   var body: some View {
     TabView(selection: $selectedTab) {
-      FitnessHistoryView().tabItem { Label("Overview", systemImage: "chart.xyaxis.line") }.tag(0)
+      AnalyticsExplorerView().tabItem { Label("Overview", systemImage: "chart.xyaxis.line") }.tag(0)
       TrainingPlannerView().tabItem { Label("Training", systemImage: "calendar") }.tag(1)
     }
     .tint(RoburStyle.orange)

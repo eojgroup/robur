@@ -35,6 +35,21 @@ Historical points use only observations available by their daily cutoff. The
 app, graph details and optional export use the same engine and methodology version.
 Widget "recovery signals" estimates have fewer inputs and are labelled separately.
 
-Cloud deployment and native uploads are paused. Backend code is prepared for
-private account-scoped records and explicit, revocable consent. No Google
-infrastructure is deployed by validation or by an ordinary source push.
+Cloud charts display the uploaded versioned analysis; they do not independently
+recalculate the score. Score versions are viewed separately. Metric overlays use
+raw units only for measures with matching units, or normalize each metric against
+its own prior 30-day baseline with at least seven distinct recorded dates. Z-score
+comparisons with a flat baseline are unavailable unless the current value matches
+that baseline. Missing observations remain missing. Long native histories use
+labelled weekly/monthly means; raw daily inspection remains available.
+
+Highlights mark long/high-effort workouts, a recovery score at least 15 points
+below its recent baseline, simultaneous shifts in two recovery signals (sleep/HRV
+20% lower or resting HR 10% higher), and input-weight coverage below 50%. These
+are transparent Robur display rules, not validated thresholds for illness or
+injury. Lagged Pearson correlations require 14 observed date pairs with variation
+and describe association only. CSV export contains the selected uploaded records.
+
+Cloud deployment is active in `robur-505508`. Native uploads are optional and
+require private account pairing and explicit, revocable consent. Ordinary source
+pushes validate cloud configuration without provisioning Google resources.

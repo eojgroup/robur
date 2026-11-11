@@ -1,23 +1,25 @@
 # Prepared private health cloud
 
-Google deployments are paused at the user's request. GKE remains the selected
-future platform; the Cloud Run files below are an unselected cost comparison,
-not authorization to provision resources. The cloud workflow validates only
-and has no deployment job. Both repository and production-environment
-`GCP_DEPLOYMENTS_ENABLED` variables are `false`.
+The user resumed low-cost Google deployment on 11 November 2026. The active
+platform is Cloud Run + Cloud SQL in **`robur-505508`**, with no resources
+provisioned in Claritas. The live HTTPS origin is:
 
+**https://robur-health-ydne76eqcq-nw.a.run.app**
+
+The database migration and runtime readiness checks passed. Google Auth Platform
+uses a dedicated Robur Web client with this JavaScript origin. The public
+example is synthetic; real Health data requires Google sign-in, device pairing
+and explicit consent.
 
 ## Deployment choice and budget
 
-The existing Robur project (`robur-505508`) currently has no running GKE cluster,
-Cloud SQL instance, VM or load balancer. Its old regional-GKE Terraform is a
-different deployment profile and must remain paused for a $25/month budget.
-Google charges $0.10/hour for regional GKE management before node, database,
-disk or ingress charges; the zonal/Autopilot free-tier credit does not cover a
-regional cluster. The unrelated Claritas cluster has active workloads and little
-memory headroom; this deployment neither changes nor reuses it.
+Legacy regional GKE is unused. Its Terraform and Kubernetes manifests remain
+separate and must not be applied within the $25/month ceiling. Repository and
+production `GCP_DEPLOYMENTS_ENABLED` gates stay false to prevent those legacy
+workflows from provisioning a cluster. Cloud source pushes run validation only;
+use the reviewed manual release procedure below for this Cloud Run service.
 
-The prepared small-beta profile uses one Cloud Run service for both web and API,
+The deployed small-beta profile uses one Cloud Run service for both web and API,
 plus a dedicated Cloud SQL PostgreSQL instance. Both stay in `europe-west2`.
 The infrastructure is separate from the legacy GKE state:
 
@@ -31,8 +33,9 @@ The infrastructure is separate from the legacy GKE state:
 
 These are conservative planning allowances, not a Google price quote or a hard
 billing cap. Cloud Run and egress charges depend on use, and free-tier credits
-are shared by billing account. The $25 project budget alerts at 50%, 80% and
-100%; budget alerts do not stop spending. The resource settings bound instance
+are shared by billing account. The billing account uses SEK, so an intentionally early 200 SEK/month project
+budget alerts at 50%, 80% and 100% (configured as `billing_currency="SEK"`,
+`monthly_budget_usd=25`, conservative alert conversion of 8 SEK/USD); budget alerts do not stop spending. The resource settings bound instance
 count and disk size, but do not promise a fixed total under arbitrary traffic.
 Review billing after initial use before increasing ingestion volume.
 
@@ -140,22 +143,41 @@ and email are used for account identity; HealthKit permission is granted on the
 device separately. Do not reuse another app's OAuth client or change its origins.
 
 Set the public client ID in Terraform's `google_web_client_id` and GitHub's
-production variable `GOOGLE_WEB_CLIENT_ID`; no OAuth client secret belongs in the
+release configuration `GOOGLE_WEB_CLIENT_ID` (if a future deployment workflow uses it); no OAuth client secret belongs in the
 browser or iOS app. Verify that API sign-in accepts tokens for this exact client
 and rejects different audiences. Pair the native app through the web account's
 one-time code, choose data categories, and explicitly enable sync. Health data
 must remain local before that choice.
 
-## Resuming deployment later
+## Subsequent releases and checks
 
-GKE preparation remains in `infra/gcp/terraform` and `infra/k8s`. A dedicated
-regional cluster plus PostgreSQL cannot fit the current $25/month ceiling.
-Do not apply this configuration until the user revisits the budget and explicitly
-resumes Google deployments. The existing GKE and Terraform workflows require a
-manual dispatch, `GCP_DEPLOYMENT_PLATFORM=gke`, and the deployment gate enabled.
-The Cloud Run alternative is not selected and has no deployment workflow.
+1. Run `pnpm typecheck`, `pnpm test`, `pnpm build`, and Terraform format/validation.
+2. Build a clean source snapshot with `infra/cloudbuild-health.yaml`, the dedicated
+   `robur-health-build` account, and the Robur build-source bucket. Pin the resulting
+   image digest in the private Terraform variable file. Never upload local state,
+   private variable files, credentials or Health exports.
+3. Review the complete Terraform plan. A normal code release updates only the
+   migration job and Cloud Run service image; identity and capacity changes need
+   separate review. Run schema migrations before routing a revision that requires
+   a changed schema. The current analytics release uses the existing schema.
+4. Execute `robur-health-migrate` using its isolated migration identity. Check
+   `/readyz`, `/healthz`, `/api/config`, and require HTTP 401 for anonymous
+   `/api/health/dashboard` calls. Reject forged Google/device credentials.
+5. For an authenticated smoke test, use synthetic records only and delete them
+   afterwards. `apps/api/src/postgres-smoke.ts` exercises consent, pairing,
+   idempotency, owner separation, detailed-data omission and deletion against real
+   PostgreSQL using the runtime role. It is run as a temporary Cloud Run job;
+   it does not expose or log credentials or Health payloads.
+6. Native 1.9.0 enables the opt-in Cloud sync screen with the deployed origin.
+   Sign in to the web dashboard, choose Connect device, then enter the one-use
+   code in Robur → Settings → Cloud sync, review categories, and upload.
 
-Google OAuth client configuration, schema migration and real PostgreSQL integration
-must be verified before enabling the web service. Native web sync is disabled in
-this release while the backend remains undeployed. Backend and web tests run locally
-and in credential-free CI; they do not provision Google resources.
+Google sign-in must be tested interactively with an approved Google account;
+CLI login does not provide a browser session. The service verifies issuer,
+audience, expiry, signature and verified-email claims. No client secret is used
+in the website or native app. No real Health data is uploaded during deployment.
+
+The Terraform provider explicitly charges quota to `robur-505508`, including the
+billing-budget API. The billing currency must match the billing account. Google
+requires this even when the planning ceiling is expressed in USD. Public website
+access does not grant unauthenticated access to private Health routes.

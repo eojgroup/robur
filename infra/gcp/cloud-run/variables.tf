@@ -1,4 +1,10 @@
-variable "project_id" { type = string }
+variable "project_id" {
+  type = string
+  validation {
+    condition     = var.project_id == "robur-505508"
+    error_message = "Robur resources must be deployed only to robur-505508."
+  }
+}
 variable "region" {
   type    = string
   default = "europe-west2"
@@ -22,6 +28,15 @@ variable "monthly_budget_usd" {
   validation {
     condition     = var.monthly_budget_usd > 0 && var.monthly_budget_usd <= 25
     error_message = "This beta deployment must stay within the approved $25 monthly planning budget."
+  }
+}
+variable "billing_currency" {
+  description = "Must match the billing account. SEK uses an intentionally early alert of 8 SEK per USD of planning allowance."
+  type        = string
+  default     = "USD"
+  validation {
+    condition     = contains(["USD", "SEK"], var.billing_currency)
+    error_message = "Review the alert conversion before using a different billing currency."
   }
 }
 variable "enable_public_service" {
