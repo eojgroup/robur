@@ -22,7 +22,7 @@ enum MetricColors {
       let (r, g, b) = rgb(scheme == .dark ? spec.dark : spec.light)
       return Color(red: Double(r), green: Double(g), blue: Double(b))
     }
-    #if canImport(UIKit)
+    #if os(iOS)
     return Color(uiColor: UIColor { traits in
       let (r, g, b) = rgb(traits.userInterfaceStyle == .dark ? spec.dark : spec.light)
       return UIColor(red: r, green: g, blue: b, alpha: 1)
