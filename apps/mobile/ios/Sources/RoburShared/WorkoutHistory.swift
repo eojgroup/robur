@@ -69,7 +69,7 @@ struct FitnessReading: Identifiable, Hashable {
   let metric: FitnessMetric
 }
 
-enum FitnessMetric: String, CaseIterable, Identifiable {
+enum FitnessMetric: String, CaseIterable, Identifiable, Sendable {
   case cardio = "Cardio fitness", restingHR = "Resting HR", hrv = "HRV"
   case weight = "Weight", bodyFat = "Body fat", bmi = "BMI", height = "Height"
   case steps = "Steps", exercise = "Exercise", stand = "Stand time", energy = "Active energy", sleep = "Sleep"

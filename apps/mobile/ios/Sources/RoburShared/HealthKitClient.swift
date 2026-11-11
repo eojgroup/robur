@@ -204,6 +204,8 @@ final class HealthKitClient: ObservableObject {
     )
   }
 
+  // HealthKit delivers these callbacks on background queues. Explicit Sendable
+  // handlers keep them independent of this observable client's MainActor.
   private func latestQuantity(
     identifier: HKQuantityTypeIdentifier,
     unit: HKUnit,
@@ -227,7 +229,7 @@ final class HealthKitClient: ObservableObject {
         predicate: predicate,
         limit: 1,
         sortDescriptors: sortDescriptors
-      ) { _, samples, error in
+      ) { @Sendable _, samples, error in
         if let error {
           continuation.resume(throwing: error)
           return
@@ -257,7 +259,7 @@ final class HealthKitClient: ObservableObject {
         quantityType: quantityType,
         quantitySamplePredicate: predicate,
         options: .cumulativeSum
-      ) { _, result, error in
+      ) { @Sendable _, result, error in
         if let error {
           continuation.resume(throwing: error)
           return
@@ -285,7 +287,7 @@ final class HealthKitClient: ObservableObject {
         predicate: predicate,
         limit: HKObjectQueryNoLimit,
         sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)]
-      ) { _, samples, error in
+      ) { @Sendable _, samples, error in
         if let error {
           continuation.resume(throwing: error)
           return
@@ -325,7 +327,7 @@ final class HealthKitClient: ObservableObject {
         predicate: predicate,
         limit: HKObjectQueryNoLimit,
         sortDescriptors: sortDescriptors
-      ) { _, samples, error in
+      ) { @Sendable _, samples, error in
         if let error {
           continuation.resume(throwing: error)
           return
@@ -440,10 +442,11 @@ extension HealthKitClient {
       let reference = await referenceResult
       let effortScores = effortResult.values
       guard historyRequest == request else { return }
-      let imported = samples.compactMap { $0 as? HKWorkout }
+      var seenWorkoutIDs: Set<UUID> = []
+      let imported = samples.compactMap { $0 as? HKWorkout }.filter { seenWorkoutIDs.insert($0.uuid).inserted }
       let recentHeart = await readRecentWorkoutHeartRates(imported, now: now)
       guard historyRequest == request else { return }
-      rawWorkouts = Dictionary(uniqueKeysWithValues: imported.map { ($0.uuid.uuidString, $0) })
+      rawWorkouts = Dictionary(imported.map { ($0.uuid.uuidString, $0) }, uniquingKeysWith: { _, latest in latest })
       loadedWorkoutDetails = []
       effortCandidates = effortResult.candidates
       effortImportError = effortResult.error
@@ -496,7 +499,7 @@ extension HealthKitClient {
       let gate = HealthQueryCompletionGate()
       let predicate = HKQuery.predicateForSamples(withStart: healthStore.earliestPermittedSampleDate(), end: now, options: [])
       let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: 1,
-        sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)]) { query, samples, _ in
+        sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)]) { @Sendable query, samples, _ in
         guard gate.claim() else { return }; healthStore.stop(query)
         continuation.resume(returning: samples?.first?.startDate)
       }
@@ -543,7 +546,7 @@ extension HealthKitClient {
       let healthStore = store
       let relationships: [HKWorkoutEffortRelationship] = try await withCheckedThrowingContinuation { continuation in
         let completion = HealthQueryCompletionGate()
-        let query = HKWorkoutEffortRelationshipQuery(predicate: nil, anchor: nil, options: .mostRelevant) { query, relationships, _, error in
+        let query = HKWorkoutEffortRelationshipQuery(predicate: nil, anchor: nil, options: .mostRelevant) { @Sendable query, relationships, _, error in
           guard completion.claim() else { return }
           // This is a long-running query. Stop before resuming the snapshot so a
           // later Health edit cannot resume the checked continuation a second time.
@@ -726,7 +729,7 @@ extension HealthKitClient {
     guard let type = HKQuantityType.quantityType(forIdentifier: identifier) else { return [] }
     return try await withCheckedThrowingContinuation { continuation in
       let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit,
-        sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)]) { _, samples, error in
+        sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)]) { @Sendable _, samples, error in
         if let error { continuation.resume(throwing: error) }
         else { continuation.resume(returning: (samples ?? []).compactMap { $0 as? HKQuantitySample }) }
       }
@@ -734,7 +737,7 @@ extension HealthKitClient {
     }
   }
 
-  private struct DailyQuantitySpec {
+  private struct DailyQuantitySpec: Sendable {
     let metric: FitnessMetric
     let identifier: HKQuantityTypeIdentifier
     let unit: HKUnit
@@ -796,7 +799,7 @@ extension HealthKitClient {
       let query = HKStatisticsCollectionQuery(quantityType: type, quantitySamplePredicate: predicate,
         options: spec.cumulative ? .cumulativeSum : .discreteAverage,
         anchorDate: Calendar.current.startOfDay(for: end), intervalComponents: DateComponents(day: 1))
-      query.initialResultsHandler = { query, collection, error in
+      query.initialResultsHandler = { @Sendable query, collection, error in
         guard completion.claim() else { return }
         healthStore.stop(query)
         if let error { continuation.resume(throwing: error); return }
@@ -871,7 +874,7 @@ extension HealthKitClient {
     let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: options)
     return try await withCheckedThrowingContinuation { continuation in
       let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit,
-        sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)]) { _, samples, error in
+        sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)]) { @Sendable _, samples, error in
         if let error { continuation.resume(throwing: error) }
         else { continuation.resume(returning: samples ?? []) }
       }
