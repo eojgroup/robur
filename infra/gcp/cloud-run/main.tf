@@ -218,14 +218,14 @@ resource "google_cloud_run_v2_service" "health" {
         period_seconds        = 5
         failure_threshold     = 20
         http_get {
-          path = "/healthz"
+          path = "/api/status/live"
           port = 8080
         }
       }
       liveness_probe {
         period_seconds = 30
         http_get {
-          path = "/healthz"
+          path = "/api/status/live"
           port = 8080
         }
       }

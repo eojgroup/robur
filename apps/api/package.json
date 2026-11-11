@@ -14,7 +14,7 @@
   "dependencies": {
     "@robur/core": "workspace:*",
     "cors": "^2.8.5",
-    "express": "^4.21.2",
+    "express": "^4.22.3",
     "pg": "^8.16.3"
   },
   "devDependencies": {

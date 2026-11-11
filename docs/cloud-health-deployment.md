@@ -161,7 +161,7 @@ must remain local before that choice.
    separate review. Run schema migrations before routing a revision that requires
    a changed schema. The current analytics release uses the existing schema.
 4. Execute `robur-health-migrate` using its isolated migration identity. Check
-   `/readyz`, `/healthz`, `/api/config`, and require HTTP 401 for anonymous
+   `/api/status/ready`, `/api/status/live`, `/api/config`, and require HTTP 401 for anonymous
    `/api/health/dashboard` calls. Reject forged Google/device credentials.
 5. For an authenticated smoke test, use synthetic records only and delete them
    afterwards. `apps/api/src/postgres-smoke.ts` exercises consent, pairing,
@@ -181,3 +181,7 @@ The Terraform provider explicitly charges quota to `robur-505508`, including the
 billing-budget API. The billing currency must match the billing account. Google
 requires this even when the planning ceiling is expressed in USD. Public website
 access does not grant unauthenticated access to private Health routes.
+
+Cloud Run reserves some URL paths ending in `z`; external checks use
+`/api/status/live` and `/api/status/ready`. Legacy Kubernetes aliases remain.
+See [Google known issues](https://docs.cloud.google.com/run/docs/known-issues#reserved-url-paths).

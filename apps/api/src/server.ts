@@ -43,8 +43,9 @@ export function createServer(config: ApiConfig, store: FitnessStore, authenticat
   };
   const principal = (res: express.Response) => res.locals.principal as Principal;
 
-  app.get("/healthz", (_req, res) => { res.status(200).json({ ok: true, service: "robur-api" }); });
-  app.get("/readyz", async (_req, res) => {
+  // Keep legacy Kubernetes aliases; Cloud Run reserves some *z URL paths.
+  app.get(["/api/status/live", "/healthz"], (_req, res) => { res.status(200).json({ ok: true, service: "robur-api" }); });
+  app.get(["/api/status/ready", "/readyz"], async (_req, res) => {
     try { await store.ping(); res.status(200).json({ ok: true }); }
     catch { res.status(503).json({ ok: false }); }
   });

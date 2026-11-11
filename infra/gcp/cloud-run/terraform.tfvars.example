@@ -4,5 +4,7 @@ billing_account_id = "YOUR_BILLING_ACCOUNT_ID"
 container_image    = "europe-west2-docker.pkg.dev/robur-505508/robur-app/robur-api:COMMIT_SHA"
 google_web_client_id = "YOUR_GOOGLE_WEB_CLIENT_ID.apps.googleusercontent.com"
 monthly_budget_usd = 25
+# Match the billing account. SEK uses an earlier 200 SEK alert for a $25 ceiling.
+billing_currency = "SEK"
 # Set true only after the migration job succeeds and removes app admin privileges.
 enable_public_service = false

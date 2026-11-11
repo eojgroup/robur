@@ -42,6 +42,8 @@ const batch = () => ({ schemaVersion: 1, sourceDeviceId: "device-a", capturedAt:
 describe("private Health sync boundary", () => {
   it("rejects anonymous reads, one-use code replay, mismatched devices and unconsented samples", async () => {
     const { request, pair } = await fixture();
+    expect((await request("/api/status/live")).status).toBe(200);
+    expect((await request("/api/status/ready")).status).toBe(200);
     expect((await request("/api/health/dashboard")).status).toBe(401);
     const { code, deviceToken } = await pair();
     expect((await request("/api/pairings/redeem", undefined, "POST", { code, sourceDeviceId: "other", deviceName: "Test" })).status).toBe(400);
