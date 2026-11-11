@@ -73,6 +73,40 @@ struct FitnessHistoryView: View {
     }
   }
   private var content: some View {
+    observedContent
+      .sheet(isPresented: $showingDay) { daySheet }
+      .sheet(isPresented: $showingMuscles) { muscleSheet }
+      .sheet(isPresented: $showingEvents) { eventsSheet }
+  }
+  private var observedContent: some View {
+    configuredContent
+      .onChange(of: healthKit.workouts, initial: true) { _, _ in recalculate() }
+      .onChange(of: healthKit.analyticsWorkouts) { _, _ in recalculate() }
+      .onChange(of: journal.annotations) { _, _ in recalculate() }
+      .onChange(of: maxHR) { _, _ in recalculate() }
+      .onChange(of: stepsGoal) { _, _ in recalculate() }
+      .onChange(of: exerciseGoal) { _, _ in recalculate() }
+      .onChange(of: healthKit.dailyMetrics) { _, _ in recalculate() }
+      .onChange(of: signal) { _, _ in recalculate() }
+      .onChange(of: healthKit.historyRange) { _, _ in selectedDate = nil; recalculate() }
+      .onDisappear { analysisTask?.cancel() }
+  }
+  private var configuredContent: some View {
+    historyScrollContent
+      .background(RoburStyle.background)
+      .navigationTitle("Overview").navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        NavigationLink { HealthSettingsView() } label: { Image(systemName: "slider.horizontal.3") }
+          .accessibilityLabel("Goals, appearance and notifications")
+        Button { healthKit.requestAuthorization() } label: { Image(systemName: "heart.text.square") }
+          .accessibilityLabel("Manage Health access")
+      }
+      .task {
+        if healthKit.authorizationRequested { await healthKit.refreshTodaySnapshot() }
+      }
+      .refreshable { await healthKit.refreshTodaySnapshot(); await healthKit.loadHistory(range: healthKit.historyRange) }
+  }
+  private var historyScrollContent: some View {
       ScrollView {
         VStack(alignment: .leading, spacing: 16) {
           timelineCard
@@ -91,44 +125,23 @@ struct FitnessHistoryView: View {
           } }
           .padding().frame(maxWidth: .infinity)
       }
-      .background(RoburStyle.background)
-      .navigationTitle("Overview").navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        NavigationLink { HealthSettingsView() } label: { Image(systemName: "slider.horizontal.3") }
-          .accessibilityLabel("Goals, appearance and notifications")
-        Button { healthKit.requestAuthorization() } label: { Image(systemName: "heart.text.square") }
-          .accessibilityLabel("Manage Health access")
-      }
-      .task {
-        if healthKit.authorizationRequested { await healthKit.refreshTodaySnapshot() }
-      }
-      .refreshable { await healthKit.refreshTodaySnapshot(); await healthKit.loadHistory(range: healthKit.historyRange) }
-      .onChange(of: healthKit.workouts, initial: true) { _, _ in recalculate() }
-      .onChange(of: healthKit.analyticsWorkouts) { _, _ in recalculate() }
-      .onChange(of: journal.annotations) { _, _ in recalculate() }
-      .onChange(of: maxHR) { _, _ in recalculate() }
-      .onChange(of: stepsGoal) { _, _ in recalculate() }
-      .onChange(of: exerciseGoal) { _, _ in recalculate() }
-      .onChange(of: healthKit.dailyMetrics) { _, _ in recalculate() }
-      .onChange(of: signal) { _, _ in recalculate() }
-      .onChange(of: healthKit.historyRange) { _, _ in selectedDate = nil; recalculate() }
-      .onDisappear { analysisTask?.cancel() }
-      .sheet(isPresented: $showingDay) {
+  }
+  private var daySheet: some View {
         NavigationStack {
           ScrollView { dayInspector.padding() }.background(RoburStyle.background)
             .navigationTitle("Day details").navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("Done") { showingDay = false } }
             .sheet(item: $selectedWorkout) { WorkoutDetailView(workout: $0) }
         }
-      }
-      .sheet(isPresented: $showingMuscles) {
+  }
+  private var muscleSheet: some View {
         NavigationStack {
           ScrollView { muscleCard.padding() }.background(RoburStyle.background)
             .navigationTitle("Muscle balance").navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("Done") { showingMuscles = false } }
         }
-      }
-      .sheet(isPresented: $showingEvents) {
+  }
+  private var eventsSheet: some View {
         NavigationStack {
           List {
             Toggle("Workout markers only", isOn: $workoutMarkersOnly)
@@ -153,7 +166,6 @@ struct FitnessHistoryView: View {
           }.navigationTitle("Marked dates")
             .toolbar { Button("Done") { showingEvents = false } }
         }
-      }
   }
 
   private func recalculate() {
