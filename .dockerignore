@@ -8,4 +8,12 @@ node_modules
 coverage
 .env
 .env.*
+gha-creds-*.json
+**/.terraform
+**/*.tfstate*
+**/*.tfvars*
+*.p8
+*.p12
+*.pem
+*.key
 apps/mobile/ios/**/*.xcodeproj

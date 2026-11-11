@@ -51,5 +51,5 @@ injury. Lagged Pearson correlations require 14 observed date pairs with variatio
 and describe association only. CSV export contains the selected uploaded records.
 
 Cloud deployment is active in `robur-505508`. Native uploads are optional and
-require private account pairing and explicit, revocable consent. Ordinary source
-pushes validate cloud configuration without provisioning Google resources.
+require private account pairing and explicit, revocable consent. Relevant main-branch pushes deploy tested cloud code and infrastructure through
+GitHub Actions, within the approved beta envelope; pull requests validate only.

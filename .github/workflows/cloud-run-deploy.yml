@@ -1,19 +1,19 @@
-name: Validate prepared cloud configuration
+name: Deploy Robur health cloud
 
 on:
   push:
     branches: [main]
-    paths: ["apps/api/**", "apps/web/**", "packages/**", "infra/gcp/cloud-run/**", "infra/gcp/sql/**", "infra/cloudbuild-health.yaml", ".github/workflows/cloud-run-deploy.yml", "pnpm-lock.yaml", "package.json"]
+    paths: ["apps/api/**", "apps/web/**", "packages/**", "infra/gcp/cloud-run/**", "infra/gcp/sql/**", "infra/cloudbuild-health.yaml", ".github/workflows/cloud-run-deploy.yml", "pnpm-lock.yaml", "package.json", "infra/scripts/check-health-plan*"]
   pull_request:
-    paths: ["apps/api/**", "apps/web/**", "packages/**", "infra/gcp/cloud-run/**", "infra/gcp/sql/**", "infra/cloudbuild-health.yaml", ".github/workflows/cloud-run-deploy.yml", "pnpm-lock.yaml", "package.json"]
+    paths: ["apps/api/**", "apps/web/**", "packages/**", "infra/gcp/cloud-run/**", "infra/gcp/sql/**", "infra/cloudbuild-health.yaml", ".github/workflows/cloud-run-deploy.yml", "pnpm-lock.yaml", "package.json", "infra/scripts/check-health-plan*"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: robur-health-cloud-validation-${{ github.ref }}
-  cancel-in-progress: true
+  group: robur-health-cloud-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   validate:
@@ -29,6 +29,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      - run: python3 infra/scripts/check-health-plan_test.py
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.8.5
@@ -38,3 +39,138 @@ jobs:
           terraform fmt -check -recursive
           terraform init -backend=false
           terraform validate
+
+  deploy:
+    needs: validate
+    if: vars.GCP_HEALTH_DEPLOYMENTS_ENABLED == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT_ID: robur-505508
+      REGION: europe-west2
+      TF_STATE_BUCKET: robur-tf-state-robur-505508
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+      TF_VAR_project_id: robur-505508
+      TF_VAR_region: europe-west2
+      TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
+      TF_VAR_billing_currency: SEK
+      TF_VAR_monthly_budget_usd: 25
+      TF_VAR_enable_public_service: true
+      TF_VAR_google_web_client_id: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
+      IMAGE_REPOSITORY: europe-west2-docker.pkg.dev/robur-505508/robur-app/robur-api
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check production configuration
+        env:
+          DEPLOYMENTS_ENABLED: ${{ vars.GCP_HEALTH_DEPLOYMENTS_ENABLED }}
+        run: |
+          set -euo pipefail
+          [[ "$PROJECT_ID" == "robur-505508" && "$DEPLOYMENTS_ENABLED" == "true" ]]
+          test -n "$TF_VAR_billing_account_id"
+          [[ "$TF_VAR_google_web_client_id" == 112122569407-*.apps.googleusercontent.com ]]
+          echo "SMOKE_JOB=robur-health-smoke-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - name: Authenticate using Robur GitHub OIDC
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_TERRAFORM_SERVICE_ACCOUNT }}
+          token_format: access_token
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: robur-505508
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.8.5
+          terraform_wrapper: false
+      - name: Initialize existing Robur infrastructure state
+        run: terraform -chdir=infra/gcp/cloud-run init -backend-config="bucket=$TF_STATE_BUCKET"
+      - name: Verify deployment access and current infrastructure plan
+        run: |
+          set -euo pipefail
+          current_image="$(gcloud run services describe robur-health --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+          test -n "$current_image"
+          export TF_VAR_container_image="$current_image"
+          terraform -chdir=infra/gcp/cloud-run plan -lock-timeout=5m -out="$RUNNER_TEMP/preflight.tfplan"
+          terraform -chdir=infra/gcp/cloud-run show -json "$RUNNER_TEMP/preflight.tfplan" > "$RUNNER_TEMP/preflight.json"
+          python3 infra/scripts/check-health-plan.py "$RUNNER_TEMP/preflight.json"
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: europe-west2-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+      - name: Build and publish tested application
+        id: image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Pin image and review complete deployment
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          export TF_VAR_container_image="$IMAGE_REPOSITORY@$IMAGE_DIGEST"
+          echo "TF_VAR_container_image=$TF_VAR_container_image" >> "$GITHUB_ENV"
+          terraform -chdir=infra/gcp/cloud-run plan -lock-timeout=5m -out="$RUNNER_TEMP/release.tfplan"
+          terraform -chdir=infra/gcp/cloud-run show -json "$RUNNER_TEMP/release.tfplan" > "$RUNNER_TEMP/release.json"
+          python3 infra/scripts/check-health-plan.py "$RUNNER_TEMP/release.json"
+      - name: Update migration job before serving the new application
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/gcp/cloud-run plan -lock-timeout=5m -target=google_cloud_run_v2_job.migrate -out="$RUNNER_TEMP/migration.tfplan"
+          terraform -chdir=infra/gcp/cloud-run show -json "$RUNNER_TEMP/migration.tfplan" > "$RUNNER_TEMP/migration.json"
+          python3 infra/scripts/check-health-plan.py "$RUNNER_TEMP/migration.json"
+          terraform -chdir=infra/gcp/cloud-run apply -lock-timeout=5m "$RUNNER_TEMP/migration.tfplan"
+          gcloud run jobs execute robur-health-migrate --project "$PROJECT_ID" --region "$REGION" --wait
+      - name: Apply infrastructure and release application
+        run: |
+          set -euo pipefail
+          # Replan after the migration-job apply to avoid applying a stale plan.
+          terraform -chdir=infra/gcp/cloud-run plan -lock-timeout=5m -out="$RUNNER_TEMP/final.tfplan"
+          terraform -chdir=infra/gcp/cloud-run show -json "$RUNNER_TEMP/final.tfplan" > "$RUNNER_TEMP/final.json"
+          python3 infra/scripts/check-health-plan.py "$RUNNER_TEMP/final.json"
+          terraform -chdir=infra/gcp/cloud-run apply -lock-timeout=5m "$RUNNER_TEMP/final.tfplan"
+      - name: Verify live service and authentication boundary
+        run: |
+          set -euo pipefail
+          origin="$(terraform -chdir=infra/gcp/cloud-run output -raw service_url)"
+          [[ "$origin" == "https://robur-health-ydne76eqcq-nw.a.run.app" ]]
+          curl --fail --silent --show-error "$origin/"
+          curl --fail --silent --show-error "$origin/api/status/live"
+          curl --fail --silent --show-error "$origin/api/status/ready"
+          config="$(curl --fail --silent --show-error "$origin/api/config")"
+          [[ "$(jq -r .googleWebClientId <<< "$config")" == "$TF_VAR_google_web_client_id" ]]
+          for token in anonymous rbr_invalid forged.jwt.token; do
+            status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' -H "Authorization: Bearer $token" "$origin/api/health/dashboard")"
+            [[ "$status" == "401" ]] || { echo "Health authentication boundary failed: $status" >&2; exit 1; }
+          done
+          echo "Deployed [$GITHUB_SHA]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA) to $origin" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify real PostgreSQL using temporary synthetic records
+        run: |
+          gcloud run jobs create "$SMOKE_JOB" --project "$PROJECT_ID" --region "$REGION" \
+            --image "$TF_VAR_container_image" \
+            --service-account robur-health-runtime@robur-505508.iam.gserviceaccount.com \
+            --set-cloudsql-instances robur-505508:europe-west2:robur-health-sql \
+            --set-secrets DATABASE_URL=robur-health-db-runtime:latest \
+            --cpu 1 --memory 512Mi --max-retries 0 --task-timeout 180s \
+            --command node --args apps/api/dist/postgres-smoke.js --execute-now --wait
+      - name: Remove temporary validation job
+        if: always() && env.SMOKE_JOB != ''
+        run: |
+          if gcloud run jobs describe "$SMOKE_JOB" --project "$PROJECT_ID" --region "$REGION" >/dev/null 2>&1; then
+            gcloud run jobs delete "$SMOKE_JOB" --project "$PROJECT_ID" --region "$REGION" --quiet
+          fi
+      - name: Remove private Terraform plans
+        if: always()
+        run: rm -f "$RUNNER_TEMP/"{preflight,release,migration,final}.{tfplan,json}

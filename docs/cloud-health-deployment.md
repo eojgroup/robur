@@ -16,8 +16,9 @@ and explicit consent.
 Legacy regional GKE is unused. Its Terraform and Kubernetes manifests remain
 separate and must not be applied within the $25/month ceiling. Repository and
 production `GCP_DEPLOYMENTS_ENABLED` gates stay false to prevent those legacy
-workflows from provisioning a cluster. Cloud source pushes run validation only;
-use the reviewed manual release procedure below for this Cloud Run service.
+workflows from provisioning a cluster. Cloud changes on `main` deploy through `cloud-run-deploy.yml`, controlled by
+`GCP_HEALTH_DEPLOYMENTS_ENABLED=true`. Pull requests validate only. The separate
+legacy deployment gates remain false.
 
 The deployed small-beta profile uses one Cloud Run service for both web and API,
 plus a dedicated Cloud SQL PostgreSQL instance. Both stay in `europe-west2`.
@@ -149,30 +150,47 @@ and rejects different audiences. Pair the native app through the web account's
 one-time code, choose data categories, and explicitly enable sync. Health data
 must remain local before that choice.
 
-## Subsequent releases and checks
+## GitHub Actions delivery
 
-1. Run `pnpm typecheck`, `pnpm test`, `pnpm build`, and Terraform format/validation.
-2. Build a clean source snapshot with `infra/cloudbuild-health.yaml`, the dedicated
-   `robur-health-build` account, and the Robur build-source bucket. Pin the resulting
-   image digest in the private Terraform variable file. Never upload local state,
-   private variable files, credentials or Health exports.
-3. Review the complete Terraform plan. A normal code release updates only the
-   migration job and Cloud Run service image; identity and capacity changes need
-   separate review. Run schema migrations before routing a revision that requires
-   a changed schema. The current analytics release uses the existing schema.
-4. Execute `robur-health-migrate` using its isolated migration identity. Check
-   `/api/status/ready`, `/api/status/live`, `/api/config`, and require HTTP 401 for anonymous
-   `/api/health/dashboard` calls. Reject forged Google/device credentials.
-5. For an authenticated smoke test, use synthetic records only and delete them
-   afterwards. `apps/api/src/postgres-smoke.ts` exercises consent, pairing,
-   idempotency, owner separation, detailed-data omission and deletion against real
-   PostgreSQL using the runtime role. It is run as a temporary Cloud Run job;
-   it does not expose or log credentials or Health payloads.
-6. Native 1.9.0 enables the opt-in Cloud sync screen with the deployed origin.
-   Sign in to the web dashboard, choose Connect device, then enter the one-use
-   code in Robur → Settings → Cloud sync, review categories, and upload.
+`cloud-run-deploy.yml` is the release path for web, API, database migrations and
+this Terraform infrastructure. Relevant pushes to `main` deploy automatically;
+manual dispatch redeploys `main`. Pull requests run credential-free validation.
+The workflow serializes releases without cancelling a migration in progress.
 
-Google sign-in must be tested interactively with an approved Google account;
+1. Type checks, tests, production builds, Terraform validation and budget-boundary
+   tests pass before cloud credentials are issued.
+2. GitHub OIDC impersonates the existing Robur Terraform identity. The provider
+   accepts only `eojgroup/robur` on `refs/heads/main`. No long-lived service-account
+   key is stored. Production environment variables supply the billing account,
+   OAuth public client ID, state bucket and identity-provider identifiers.
+3. The workflow initializes the existing `cloud-run/state` backend and verifies
+   a complete preflight plan. Docker builds on the GitHub runner and pushes the
+   tested image to Robur Artifact Registry, pinned by digest.
+4. A complete release plan is checked for the exact Robur project, forbidden
+   deletions/replacements, and the approved database/service envelope. The
+   migration job is updated first with a targeted, checked plan. Migrations run
+   under their separate identity before the new application serves requests.
+5. A fresh complete plan is checked and applied, then the workflow verifies
+   HTTPS, database readiness, the configured OAuth ID and rejection of anonymous
+   and forged credentials. Temporary synthetic PostgreSQL fixtures verify
+   consent, pairing, idempotency, owner isolation and cascading deletion.
+6. Temporary test jobs and private plan files are removed. Plans/state/credentials
+   are never uploaded as artifacts. The Actions summary records the source
+   commit and deployed URL. `.dockerignore`/`.gcloudignore` exclude credentials.
+
+The one-time OIDC/permission bootstrap enables GitHub to take over the existing
+resources; regular application and infrastructure deployments run in Actions.
+The dedicated project budget role grants no billing-account access. The source
+Cloud Build recipe remains available for disaster recovery, not routine releases.
+Initial provisioning instructions above document the bootstrap already completed.
+
+Native 1.9.0 enables opt-in Cloud sync with the deployed origin. Sign in to the
+web dashboard, choose Connect device, then enter the one-use code in Robur →
+Settings → Cloud sync, review categories, and upload. Apple builds and TestFlight
+releases continue through `apple-build.yml`.
+
+The user verified Google browser sign-in successfully on 11 November 2026.
+For future OAuth changes, test interactively with an approved Google account;
 CLI login does not provide a browser session. The service verifies issuer,
 audience, expiry, signature and verified-email claims. No client secret is used
 in the website or native app. No real Health data is uploaded during deployment.

@@ -67,12 +67,12 @@ changing capacity or applying the separate legacy GKE configuration.
 
 ## Delivery workflows
 
-Cloud application releases are currently performed with the reviewed Cloud Build/Terraform procedure in the operations guide. Source pushes validate cloud changes without deploying. The Apple release path remains automatic:
+Application and infrastructure releases run through GitHub Actions. Relevant main-branch pushes deploy automatically; pull requests validate without deployment. Cloud authentication uses short-lived GitHub OIDC credentials:
 
 | Workflow | Normal behavior | Cost-bearing action |
 | --- | --- | --- |
 | `apple-build.yml` | Compiles iPhone, iPad, and Watch targets when Apple sources change. | Relevant `main` pushes and manual release dispatches sign and upload to TestFlight; PRs compile and test only. |
-| `cloud-run-deploy.yml` | Runs type checks, tests, build and infrastructure validation. | None; cloud releases use the documented manual procedure. |
+| `cloud-run-deploy.yml` | Tests, publishes a pinned image, migrates, applies Terraform, and verifies live API/PostgreSQL. | Automatically deploys reviewed `main` changes to Cloud Run and the existing cost-bounded infrastructure. |
 | `terraform-deploy.yml` | Production apply is paused; requires repository variable `GCP_DEPLOYMENTS_ENABLED=true` and manual opt-in. | Creates or changes GKE, Cloud SQL, IAM, networking, and related infrastructure. |
 | `gke-deploy.yml` | Validates changes; container publishing and deployment are paused behind the same repository variable and manual opt-in. | Uses Artifact Registry, GKE workloads, migrations, Ingress, and managed TLS. |
 
