@@ -575,13 +575,7 @@ struct TrainingPlannerView: View {
     switch category { case .endurance: return "Endurance"; case .mobility: return "Mobility"; default: return category.title }
   }
   private func color(_ category: TrainingCategory) -> Color {
-    switch category {
-    case .strength: return RoburStyle.orange
-    case .endurance: return RoburStyle.blue
-    case .mobility: return .teal
-    case .sport: return .purple
-    case .other: return .secondary
-    }
+    MetricColors.training(category)
   }
 }
 

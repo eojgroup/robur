@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ArrowLeft, CalendarDays, ChevronRight, CloudUpload, HeartPulse, Link2, LockKeyhole, LogOut, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
-import { healthConsentVersion, type HealthDashboard, type HealthRecord } from "@robur/core";
+import { metricColor, healthConsentVersion, type HealthDashboard, type HealthRecord } from "@robur/core";
 import { AnalyticsWorkspace } from "./AnalyticsWorkspace";
 import { exampleRecords } from "./example";
 import { components, day, groupPoints, number, points, workoutLoad, type Point, type Series } from "./data";
@@ -97,7 +97,7 @@ function App() {
       case "body": selected = [daily("weightKg", "Weight", "kg"), daily("bodyFatPercent", "Body fat", "%", colors[1]), daily("bmi", "BMI", "kg/m²", colors[2])]; break;
       default: selected = [score("recovery", "Recovery & readiness"), daily("sleepMinutes", "Sleep", "min", colors[1]), daily("hrv", "Heart-rate variability · SDNN", "ms", colors[2]), daily("restingHR", "Resting heart rate", "bpm", colors[3])];
     }
-    return selected.map(item => ({ ...item, points: groupPoints(item.points, grain, ["steps", "exerciseMinutes", "standMinutes", "activeEnergyKcal", "appleLoad"].includes(item.key)) }));
+    return selected.map(item => ({ ...item, color:metricColor(item.key), points: groupPoints(item.points, grain, ["steps", "exerciseMinutes", "standMinutes", "activeEnergyKcal", "appleLoad"].includes(item.key)) }));
   }, [records, view, grain]);
   async function act(action: () => Promise<unknown>) {
     setBusy(true); setError(undefined);

@@ -1,0 +1,23 @@
+name: Read Apple crash diagnostics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  crashes:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read TestFlight crash feedback
+        env:
+          APP_STORE_CONNECT_APP_ID: ${{ vars.APP_STORE_CONNECT_APP_ID }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY_P8: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY_P8 }}
+        run: ruby apps/mobile/ios/read_testflight_crashes.rb

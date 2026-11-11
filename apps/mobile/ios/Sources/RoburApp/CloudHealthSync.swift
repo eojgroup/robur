@@ -235,14 +235,16 @@ final class CloudHealthSync: ObservableObject {
         }
       }
       let defaults = UserDefaults.standard
-      let analysis = RecoveryInsights.make(days: health.dailyMetrics, workouts: health.analyticsWorkouts,
+      let request = TrainingAnalysisRequest(days: health.dailyMetrics, workouts: health.analyticsWorkouts,
         annotations: journal.annotations, maxHR: defaults.object(forKey: "RoburMaxHeartRate") as? Double ?? 190,
-        historyStart: health.analyticsHistoryStart,
         stepsGoal: defaults.object(forKey: "RoburStepsGoal") as? Double ?? 8000,
         exerciseGoal: defaults.object(forKey: "RoburExerciseGoal") as? Double ?? 30,
+        historyStart: health.analyticsHistoryStart,
         fitnessReference: health.fitnessReference)
-      let records = try HealthSyncExport.make(days: health.dailyMetrics, workouts: health.workouts,
-        readings: health.fitnessReadings, annotations: journal.annotations, analysis: analysis,
+      let workouts = health.workouts, readings = health.fitnessReadings
+      let analysis = try await TrainingAnalysisWorker.shared.make(request).recoveryAnalysis
+      let records = try HealthSyncExport.make(days: request.days, workouts: workouts,
+        readings: readings, annotations: request.annotations, analysis: analysis,
         includeReviews: workoutReviews, includeDetails: detailedSamples)
       let batches = try HealthSyncBatch.split(records, sourceDeviceId: connection.sourceDeviceId)
       for (index, batch) in batches.enumerated() {

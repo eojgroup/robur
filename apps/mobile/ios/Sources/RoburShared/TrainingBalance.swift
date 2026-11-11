@@ -23,7 +23,7 @@ enum TrainingCategory: String, CaseIterable, Identifiable, Codable, Hashable {
   }
 }
 
-enum WorkoutActivity: String, CaseIterable, Identifiable, Codable, Hashable {
+enum WorkoutActivity: String, CaseIterable, Identifiable, Codable, Hashable, Sendable {
   case running, cycling, walking, swimming, tennis, racketSports
   case traditionalStrength, functionalStrength, hiit, mobility, hiking, rowing, other
   var id: String { rawValue }

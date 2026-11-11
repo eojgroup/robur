@@ -1,6 +1,6 @@
 import Foundation
 
-protocol ReviewChoice: RawRepresentable, CaseIterable, Identifiable, Codable, Hashable where RawValue == String {
+protocol ReviewChoice: RawRepresentable, CaseIterable, Identifiable, Codable, Hashable, Sendable where RawValue == String {
   var title: String { get }
 }
 extension ReviewChoice { var id: String { rawValue } }
@@ -31,7 +31,7 @@ enum ReviewBodyFeeling: String, ReviewChoice {
 }
 
 /// Personal observations in Robur; never replaces an imported Fitness effort rating.
-struct WorkoutQuickReview: Codable, Equatable {
+struct WorkoutQuickReview: Codable, Equatable, Sendable {
   var pace: ReviewPace? = nil
   var feltEffort: Int? = nil
   var sportFocus: Set<SportReviewFocus> = []

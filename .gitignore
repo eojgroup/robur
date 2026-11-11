@@ -30,3 +30,6 @@ gha-creds-*.json
 **/.terraform/
 **/*.tfstate
 **/*.tfstate.*
+
+__pycache__/
+apps/mobile/ios/Resources/metric-colors.json

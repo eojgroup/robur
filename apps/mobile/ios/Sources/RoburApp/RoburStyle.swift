@@ -70,6 +70,7 @@ struct RoburRootView: View {
   @StateObject private var recorder = PhoneWorkoutRecorder.shared
   @StateObject private var reviews = WorkoutReviewStore.shared
   @State private var selectedTab = 0
+  @State private var notificationTask: Task<Void, Never>?
   var body: some View {
     TabView(selection: $selectedTab) {
       AnalyticsExplorerView().tabItem { Label("Overview", systemImage: "chart.xyaxis.line") }.tag(0)
@@ -89,10 +90,16 @@ struct RoburRootView: View {
     .onChange(of: reviews.reviews) { _, _ in journal.synchronizeReviews() }
     .onChange(of: healthKit.dailyMetrics) { _, days in
       let defaults = UserDefaults.standard
-      let summary = TrainingInsights.make(days: days, workouts: healthKit.workouts,
-        annotations: journal.annotations, maxHR: defaults.object(forKey: "RoburMaxHeartRate") as? Double ?? 190)
-      Task { await HealthNotificationManager.shared.evaluate(summary: summary, days: days,
-        stepsGoal: defaults.object(forKey: "RoburStepsGoal") as? Double ?? 8000) }
+      let request = TrainingAnalysisRequest(days: days, workouts: healthKit.analyticsWorkouts,
+        annotations: journal.annotations, maxHR: defaults.object(forKey: "RoburMaxHeartRate") as? Double ?? 190,
+        stepsGoal: defaults.object(forKey: "RoburStepsGoal") as? Double ?? 8000,
+        exerciseGoal: defaults.object(forKey: "RoburExerciseGoal") as? Double ?? 30,
+        historyStart: healthKit.analyticsHistoryStart, fitnessReference: healthKit.fitnessReference)
+      notificationTask?.cancel()
+      notificationTask = Task {
+        guard let summary = try? await TrainingAnalysisWorker.shared.make(request), !Task.isCancelled else { return }
+        await HealthNotificationManager.shared.evaluate(summary: summary, days: days, stepsGoal: request.stepsGoal)
+      }
     }
     .onOpenURL { url in
       if url.host == "today" || url.host == "progress" { selectedTab = 0 }

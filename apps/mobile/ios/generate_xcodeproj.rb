@@ -1,6 +1,11 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require "fileutils"
+# One semantic palette powers native charts and the web analytics dashboard.
+FileUtils.cp(File.expand_path("../../../packages/core/src/metric-colors.json", __dir__),
+  File.join(__dir__, "Resources", "metric-colors.json"))
+
 version_file = File.join(__dir__, "VERSION")
 
 if File.exist?(version_file)

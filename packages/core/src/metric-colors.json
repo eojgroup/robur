@@ -1,0 +1,22 @@
+{
+  "recovery": { "light": "#A94F16", "dark": "#FFA453", "aliases": ["Recovery & readiness"] },
+  "fitness": { "light": "#315A80", "dark": "#93B7DD", "aliases": ["Fitness score"] },
+  "acuteLoad": { "light": "#B44820", "dark": "#E9865C", "aliases": ["load", "Training demand", "appleLoad", "sessionLoad"] },
+  "chronicLoad": { "light": "#80643A", "dark": "#CEB991", "aliases": [] },
+  "sleep": { "light": "#52688D", "dark": "#A7B7D4", "aliases": ["sleepMinutes"] },
+  "sleepDebt": { "light": "#8B704F", "dark": "#E1CAA8", "aliases": ["Recent sleep shortfall"] },
+  "hrv": { "light": "#526D60", "dark": "#ABC8BA", "aliases": ["HRV · SDNN"] },
+  "restingHR": { "light": "#A35143", "dark": "#EFA493", "aliases": ["Resting heart rate", "Resting HR", "Heart rate"] },
+  "respiratoryRate": { "light": "#667B8A", "dark": "#B2C6D2", "aliases": ["Respiratory rate"] },
+  "oxygen": { "light": "#34717A", "dark": "#95C6CD", "aliases": ["oxygenSaturation", "Blood oxygen"] },
+  "steps": { "light": "#8B652B", "dark": "#E5BD79", "aliases": ["activity", "Activity"] },
+  "exercise": { "light": "#A55B28", "dark": "#F6B37F", "aliases": ["exerciseMinutes"] },
+  "stand": { "light": "#596B80", "dark": "#A5B6CA", "aliases": ["standMinutes", "Stand time"] },
+  "energy": { "light": "#A34224", "dark": "#F29978", "aliases": ["activeEnergyKcal", "Active energy"] },
+  "cardio": { "light": "#3B6488", "dark": "#A3C3E1", "aliases": ["vo2Max", "VO₂ max", "Cardio fitness"] },
+  "weight": { "light": "#7A6757", "dark": "#D2BCA8", "aliases": ["weightKg", "height"] },
+  "bodyFat": { "light": "#877346", "dark": "#DCCA9E", "aliases": ["bodyFatPercent", "Body fat"] },
+  "bmi": { "light": "#6C737D", "dark": "#BEC5CE", "aliases": [] },
+  "consistency": { "light": "#5D6551", "dark": "#C5CBB1", "aliases": [] },
+  "strength": { "light": "#925A3E", "dark": "#D8AA8D", "aliases": [] }
+}

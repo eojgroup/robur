@@ -28,7 +28,8 @@ final class AppPresentationTests: XCTestCase {
       let date = Calendar.current.date(byAdding: .day, value: -(index + 1), to: now)!
       return FitnessReading(id: "preview-\(index)", date: date, value: 46 - Double(index) * 0.08, metric: .cardio)
     }
-    let days = (0..<91).map { index -> DailyHealthMetrics in
+    // Exercise a realistic large imported history while rendering a 90-day view.
+    let days = (0..<800).map { index -> DailyHealthMetrics in
       let date = Calendar.current.startOfDay(for: Calendar.current.date(byAdding: .day, value: -index, to: now)!)
       return DailyHealthMetrics(date: date, sleepMinutes: 430 + Double(index % 30), steps: 7000 + Double((index * 211) % 4000),
         exerciseMinutes: 25 + Double(index % 30), standMinutes: 90 + Double(index % 20), activeEnergyKcal: 450 + Double(index % 100),

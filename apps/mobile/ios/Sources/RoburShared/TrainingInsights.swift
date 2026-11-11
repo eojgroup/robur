@@ -1,19 +1,19 @@
 import Foundation
 
-struct InsightScore: Identifiable {
+struct InsightScore: Identifiable, Sendable {
   var id: String { title }
   let title: String
   let value: Int
   let explanation: String
 }
 
-struct DailyLoadPoint: Identifiable {
+struct DailyLoadPoint: Identifiable, Sendable {
   var id: Date { date }
   let date: Date
   let load: Double
 }
 
-struct HealthTrend: Identifiable {
+struct HealthTrend: Identifiable, Sendable {
   var id: String { title }
   let title: String
   let unit: String
@@ -26,26 +26,26 @@ struct HealthTrend: Identifiable {
   let mean90: Double?
 }
 
-struct PersonalRecord: Identifiable {
+struct PersonalRecord: Identifiable, Sendable {
   var id: String { title }
   let title: String
   let value: String
   let date: Date
 }
 
-struct HeartZoneTotal: Identifiable, Equatable {
+struct HeartZoneTotal: Identifiable, Equatable, Sendable {
   var id: Int { zone }
   let zone: Int
   let minutes: Double
 }
 
-struct AdaptiveGoalSuggestion {
+struct AdaptiveGoalSuggestion: Sendable {
   let current: Double
   let proposed: Double
   let reason: String
 }
 
-struct InsightsSummary {
+struct InsightsSummary: Sendable {
   let readiness: Int?
   let fitness: Int?
   let scores: [InsightScore]

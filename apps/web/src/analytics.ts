@@ -1,9 +1,8 @@
-import type { HealthRecord, JsonValue } from "@robur/core";
+import { metricColor, type HealthRecord, type JsonValue } from "@robur/core";
 import { components, day, number, points, workoutLoad, type Point, type Series } from "./data";
 
 export interface Highlight { id: string; start: string; end: string; title: string; detail: string; kind: "effort" | "recovery" | "signals" | "coverage" }
 export interface ComparedPoint extends Point { raw: number; baseline: number; observations: number }
-const palette = ["#ed8b4c", "#65aaba", "#cbb377", "#ab92cd", "#8cbe9d", "#db8798"];
 export const metricSpecs = [
   ["score", "recovery", "Recovery", "/100"], ["score", "fitness", "Fitness", "/100"],
   ["score", "acuteLoad", "Acute load · 7d", "AU/day"], ["score", "chronicLoad", "Chronic load · 42d", "AU/day"],
@@ -17,7 +16,7 @@ export const metricSpecs = [
 ] as const;
 
 export function analyticsSeries(records: HealthRecord[]): Series[] {
-  return metricSpecs.map(([kind, key, title, unit], i) => ({ key, title, unit, color: palette[i % palette.length],
+  return metricSpecs.map(([kind, key, title, unit]) => ({ key, title, unit, color: metricColor(key),
     points: key === "sessionLoad" ? workoutLoad(records) : points(records, kind, key) }));
 }
 const timestamp = (date: string) => Date.parse(`${date}T12:00:00Z`);

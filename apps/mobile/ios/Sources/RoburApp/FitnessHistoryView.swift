@@ -17,6 +17,7 @@ struct FitnessHistoryView: View {
   @State private var graph: OverviewGraph = .recoveryScore
   @State private var scoreVariation: RecoveryChartVariation = .history
   @State private var scoreAnalysis: RecoveryAnalysis?
+  @State private var analysisTask: Task<Void, Never>?
   @State private var contentWidth: CGFloat = 360
   @State private var showingDay = false
   @State private var showingMuscles = false
@@ -111,6 +112,7 @@ struct FitnessHistoryView: View {
       .onChange(of: healthKit.dailyMetrics) { _, _ in recalculate() }
       .onChange(of: signal) { _, _ in recalculate() }
       .onChange(of: healthKit.historyRange) { _, _ in selectedDate = nil; recalculate() }
+      .onDisappear { analysisTask?.cancel() }
       .sheet(isPresented: $showingDay) {
         NavigationStack {
           ScrollView { dayInspector.padding() }.background(RoburStyle.background)
@@ -155,10 +157,16 @@ struct FitnessHistoryView: View {
   }
 
   private func recalculate() {
-    scoreAnalysis = RecoveryInsights.make(days: healthKit.dailyMetrics, workouts: healthKit.analyticsWorkouts,
+    analysisTask?.cancel()
+    let request = TrainingAnalysisRequest(days: healthKit.dailyMetrics, workouts: healthKit.analyticsWorkouts,
       annotations: journal.annotations, maxHR: maxHR,
-      historyStart: healthKit.analyticsHistoryStart, stepsGoal: stepsGoal,
-      exerciseGoal: exerciseGoal, fitnessReference: healthKit.fitnessReference)
+      stepsGoal: stepsGoal, exerciseGoal: exerciseGoal,
+      historyStart: healthKit.analyticsHistoryStart, fitnessReference: healthKit.fitnessReference)
+    analysisTask = Task {
+      try? await Task.sleep(for: .milliseconds(120))
+      guard !Task.isCancelled, let result = try? await TrainingAnalysisWorker.shared.make(request), !Task.isCancelled else { return }
+      scoreAnalysis = result.recoveryAnalysis
+    }
     timeline = TrainingTimeline.make(workouts: healthKit.workouts, days: healthKit.dailyMetrics,
       signal: signal, grain: grain, start: healthKit.historyRange.startDate())
   }
@@ -300,7 +308,7 @@ struct FitnessHistoryView: View {
           ForEach(visible) { point in
             BarMark(x: .value("Period", point.date, unit: grain.component),
               y: .value(showLoad ? "Apple effort load" : "Minutes", (showLoad ? point.appleLoad : point.minutes) ?? 0))
-              .foregroundStyle(RoburStyle.orange.gradient).cornerRadius(3)
+              .foregroundStyle(MetricColors.color("acuteLoad").gradient).cornerRadius(3)
               .accessibilityLabel(point.date.formatted(date: .abbreviated, time: .omitted))
               .accessibilityValue("\(Int((showLoad ? point.appleLoad : point.minutes) ?? 0)) \(showLoad ? "AU" : "minutes"), \(point.sessions) sessions")
           }
@@ -325,7 +333,7 @@ struct FitnessHistoryView: View {
                 .foregroundStyle(by: .value("Series", "Recorded · \(point.segment)"))
                 .lineStyle(StrokeStyle(lineWidth: 2.5))
               PointMark(x: .value("Period", point.date), y: .value(signal.rawValue, recoveryValue(value)))
-                .foregroundStyle(RoburStyle.blue).symbolSize(18)
+                .foregroundStyle(MetricColors.color(signal.rawValue)).symbolSize(18)
                 .accessibilityLabel(point.date.formatted(date: .abbreviated, time: .omitted))
                 .accessibilityValue("\(recoveryValue(value).formatted()) \(signal == .sleep ? "hours" : signal.unit), \(point.recoveryDays) recorded days")
             }
@@ -336,7 +344,7 @@ struct FitnessHistoryView: View {
             }
           }
           if let selectedDate { RuleMark(x: .value("Selected date", selectedDate)).foregroundStyle(.secondary) }
-        }.chartForegroundStyleScale(range: [RoburStyle.blue]).chartLegend(.hidden)
+        }.chartForegroundStyleScale(range: [MetricColors.color(signal.rawValue)]).chartLegend(.hidden)
           .chartXScale(domain: chartStart...chartEnd).chartYScale(domain: .automatic(includesZero: false))
           .chartXSelection(value: $selectedDate).chartYAxisLabel(signal == .sleep ? "hours" : signal.unit).frame(height: graphHeight)
       }
@@ -393,12 +401,12 @@ struct FitnessHistoryView: View {
           Text(metric.unit).font(.caption).foregroundStyle(.secondary)
           Spacer()
           if let first = points.first, points.count > 1 {
-            Text(String(format: "%+.1f", last.value - first.value)).font(.headline).foregroundStyle(RoburStyle.blue)
+            Text(String(format: "%+.1f", last.value - first.value)).font(.headline).foregroundStyle(MetricColors.color(metric.rawValue))
           }
         }
         Chart(points) { point in
           PointMark(x: .value("Period", point.date), y: .value(metric.rawValue, point.value))
-            .foregroundStyle(RoburStyle.blue).symbolSize(35)
+            .foregroundStyle(MetricColors.color(metric.rawValue)).symbolSize(35)
             .accessibilityLabel(point.date.formatted(date: .abbreviated, time: .omitted))
             .accessibilityValue("\(point.value.formatted()) \(metric.unit)")
           if let selectedDate { RuleMark(x: .value("Selected", selectedDate)).foregroundStyle(.secondary) }

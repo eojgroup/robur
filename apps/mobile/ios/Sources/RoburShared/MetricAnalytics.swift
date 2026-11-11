@@ -1,6 +1,6 @@
 import Foundation
 
-enum AnalyticsMetric: String, CaseIterable, Identifiable {
+enum AnalyticsMetric: String, CaseIterable, Identifiable, Sendable {
   case recovery, fitness, acuteLoad, chronicLoad, sleep, hrv, restingHR, respiratoryRate, oxygen
   case steps, exercise, stand, energy, cardio, weight, bodyFat, bmi, appleLoad
   var id: String { rawValue }
@@ -67,7 +67,7 @@ enum AnalyticsScale: String, CaseIterable, Identifiable {
   case percent = "% from baseline", zScore = "Standard deviations", raw = "Raw units"
   var id: String { rawValue }
 }
-struct AnalyticsReading: Identifiable, Equatable {
+struct AnalyticsReading: Identifiable, Equatable, Sendable {
   var id: Date { date }
   let date: Date
   let value: Double
@@ -86,8 +86,8 @@ struct AnalyticsPair: Identifiable {
   let x: Double
   let y: Double
 }
-struct AnalyticsHighlight: Identifiable {
-  enum Kind: String { case effort, recovery, signals, coverage }
+struct AnalyticsHighlight: Identifiable, Sendable {
+  enum Kind: String, Sendable { case effort, recovery, signals, coverage }
   let id: String
   let kind: Kind
   let start: Date

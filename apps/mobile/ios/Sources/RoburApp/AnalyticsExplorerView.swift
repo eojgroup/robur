@@ -34,6 +34,7 @@ struct AnalyticsExplorerView: View {
   @State private var chosen: [AnalyticsMetric] = [.recovery, .acuteLoad, .hrv, .sleep]
   @State private var scale: AnalyticsScale = .percent
   @State private var analysis: RecoveryAnalysis?
+  @State private var analysisTask: Task<Void, Never>?
   @State private var readings: [AnalyticsMetric: [AnalyticsReading]] = [:]
   @State private var highlights: [AnalyticsHighlight] = []
   @State private var selected: Date?
@@ -43,7 +44,6 @@ struct AnalyticsExplorerView: View {
   @State private var metricB: AnalyticsMetric = .recovery
   @State private var lag = 1
   private let calendar = Calendar.current
-  private let colors: [Color] = [RoburStyle.orange, .teal, .purple, RoburStyle.blue, .pink, .green]
   private var lowerBound: Date { healthKit.historyRange.startDate() ?? readings.values.compactMap { $0.first?.date }.min() ?? Date() }
   private var inspectionDate: Date { calendar.startOfDay(for: selected ?? Date()) }
   private var rawAllowed: Bool { Set(chosen.map(\.unit)).count <= 1 }
@@ -130,10 +130,12 @@ struct AnalyticsExplorerView: View {
         .onChange(of: stepsGoal) { _, _ in recalculate() }
         .onChange(of: exerciseGoal) { _, _ in recalculate() }
         .onChange(of: healthKit.historyRange) { _, _ in selected = nil; recalculate() }
+        .onDisappear { analysisTask?.cancel() }
     }
   }
   private var overlay: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    let chartPoints = plotted
+    return VStack(alignment: .leading, spacing: 12) {
       HStack {
         Menu {
           ForEach(AnalyticsMetric.allCases) { metric in
@@ -149,21 +151,21 @@ struct AnalyticsExplorerView: View {
           if rawAllowed { Text("Raw units").tag(AnalyticsScale.raw) }
         }.labelsHidden().onChange(of: chosen) { _, _ in if !rawAllowed && scale == .raw { scale = .percent } }
       }
-      if plotted.isEmpty { ContentUnavailableView("Choose metrics with recorded history", systemImage: "chart.xyaxis.line", description: Text("Baseline views need at least 7 prior recorded dates. Raw units can show a single measure immediately.")) }
+      if chartPoints.isEmpty { ContentUnavailableView("Choose metrics with recorded history", systemImage: "chart.xyaxis.line", description: Text("Baseline views need at least 7 prior recorded dates. Raw units can show a single measure immediately.")) }
       else {
         Chart {
           if showHighlights { bands }
-          ForEach(plotted) { point in
+          ForEach(chartPoints) { point in
             LineMark(x: .value("Date", point.date), y: .value("Value", point.value), series: .value("Segment", "\(point.metric.rawValue)-\(point.segment)"))
               .foregroundStyle(by: .value("Metric", point.metric.title))
-            if plotted.count < 500 {
+            if chartPoints.count < 500 {
               PointMark(x: .value("Date", point.date), y: .value("Value", point.value))
                 .foregroundStyle(by: .value("Metric", point.metric.title)).symbolSize(12)
             }
           }
           if let selected { RuleMark(x: .value("Selected", selected)).foregroundStyle(.secondary) }
-        }.chartForegroundStyleScale(domain: chosen.map(\.title), range: Array(colors.prefix(chosen.count)))
-          .chartYScale(domain: overlayDomain).chartYAxisLabel(effectiveScale == .raw ? chosen.first?.unit ?? "" : effectiveScale == .percent ? "% from baseline" : "standard deviations")
+        }.chartForegroundStyleScale(domain: chosen.map(\.title), range: chosen.map { MetricColors.color($0.rawValue) })
+          .chartYScale(domain: overlayDomain(chartPoints)).chartYAxisLabel(effectiveScale == .raw ? chosen.first?.unit ?? "" : effectiveScale == .percent ? "% from baseline" : "standard deviations")
           .chartXSelection(value: $selected).frame(height: 310)
       }
       Text(effectiveScale == .raw ? "Raw readings share the same unit. Missing observations remain missing." : "Each metric uses its own preceding 30-day baseline, excluding today, with at least 7 recorded dates. Missing readings are excluded.")
@@ -171,8 +173,8 @@ struct AnalyticsExplorerView: View {
       if let grain { Text(grain == .month ? "Monthly means for long history; inspect raw daily readings below." : "Weekly means for long history; inspect raw daily readings below.").font(.caption).foregroundStyle(.secondary) }
     }
   }
-  private var overlayDomain: ClosedRange<Double> {
-    let low = min(0, plotted.map(\.value).min() ?? 0), high = max(1, plotted.map(\.value).max() ?? 1)
+  private func overlayDomain(_ points: [ExplorerPoint]) -> ClosedRange<Double> {
+    let low = min(0, points.map(\.value).min() ?? 0), high = max(1, points.map(\.value).max() ?? 1)
     let margin = (high - low) * 0.08
     return (low - margin)...(high + margin)
   }
@@ -183,7 +185,8 @@ struct AnalyticsExplorerView: View {
     }
   }
   private var componentsChart: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    let titles = ["HRV", "Resting HR", "Respiratory rate", "Sleep", "Recent sleep shortfall", "Training demand", "Cardio", "Activity", "Consistency", "Strength"]
+    return VStack(alignment: .leading, spacing: 12) {
       Picker("Score", selection: $fitness) { Text("Recovery").tag(false); Text("Fitness").tag(true) }.pickerStyle(.segmented)
       Chart {
         if showHighlights { bands }
@@ -195,12 +198,13 @@ struct AnalyticsExplorerView: View {
           LineMark(x: .value("Date", point.date), y: .value("Overall", point.score)).foregroundStyle(RoburStyle.ink).lineStyle(StrokeStyle(lineWidth: 1.5))
         }
         if let selected { RuleMark(x: .value("Selected", selected)).foregroundStyle(.secondary) }
-      }.chartYScale(domain: 0...100).chartYAxisLabel("score points").chartXSelection(value: $selected).frame(height: 310)
+      }.chartForegroundStyleScale(domain: titles, range: titles.map { MetricColors.color($0) })
+        .chartYScale(domain: 0...100).chartYAxisLabel("score points").chartXSelection(value: $selected).frame(height: 310)
       Text("\(grain == nil ? "Daily" : grain == .month ? "Monthly mean" : "Weekly mean") component contributions sum to the score, within rounding. Missing inputs change effective weights; missing overall scores are omitted. Details show the selected day's inputs. \(analysis?.methodologyVersion ?? RecoveryAnalysis.version).")
         .font(.caption).foregroundStyle(.secondary)
       ForEach((fitness ? selectedScore?.fitnessComponents : selectedScore?.recoveryComponents) ?? []) { part in
         VStack(alignment: .leading, spacing: 3) {
-          HStack { Text(part.title).fontWeight(.medium); Spacer(); Text(String(format: "%.1f pts · %.0f%%", part.contribution, part.effectiveWeight * 100)).monospacedDigit() }
+          HStack { Circle().fill(MetricColors.color(part.key)).frame(width: 8, height: 8); Text(part.title).fontWeight(.medium); Spacer(); Text(String(format: "%.1f pts · %.0f%%", part.contribution, part.effectiveWeight * 100)).monospacedDigit() }
           Text("\(part.current.formatted(.number.precision(.fractionLength(0...1)))) \(part.unit) · baseline \(part.baseline.map { $0.formatted(.number.precision(.fractionLength(0...1))) } ?? "—")").foregroundStyle(.secondary)
           Text(part.explanation).foregroundStyle(.secondary)
         }.font(.caption)
@@ -216,7 +220,7 @@ struct AnalyticsExplorerView: View {
       if let r = MetricAnalytics.correlation(pairs) { Text("r = \(r.formatted(.number.precision(.fractionLength(2)))) · \(pairs.count) paired dates").font(.headline).monospacedDigit() }
       else { Text("Correlation needs 14 paired dates with variation in both measures.").font(.caption).foregroundStyle(.secondary) }
       Chart(pairs) { pair in
-        PointMark(x: .value(metricA.title, pair.x), y: .value(metricB.title, pair.y)).foregroundStyle(RoburStyle.orange.opacity(0.65))
+        PointMark(x: .value(metricA.title, pair.x), y: .value(metricB.title, pair.y)).foregroundStyle(MetricColors.color(metricB.rawValue).opacity(0.75))
       }.chartXAxisLabel("\(metricA.title) · \(metricA.unit)").chartYAxisLabel("\(metricB.title) · \(metricB.unit)").frame(height: 310)
       Text("Pearson correlation pairs A with B \(lag == 0 ? "on the same date" : "\(lag) days later"). Only observed pairs are used. This is an association, not evidence of cause.").font(.caption).foregroundStyle(.secondary)
     }
@@ -231,7 +235,7 @@ struct AnalyticsExplorerView: View {
         ForEach(chosen) { metric in
           let reading = readings[metric]?.first { calendar.isDate($0.date, inSameDayAs: inspectionDate) }
           VStack(alignment: .leading, spacing: 3) {
-            Text(metric.title).font(.caption).foregroundStyle(.secondary)
+            Label { Text(metric.title) } icon: { Circle().fill(MetricColors.color(metric.rawValue)).frame(width: 7, height: 7) }.font(.caption).foregroundStyle(.secondary)
             Text(reading.map { "\($0.value.formatted(.number.precision(.fractionLength(0...1)))) \(metric.unit)" } ?? "—").font(.headline).monospacedDigit()
           }
         }
@@ -256,11 +260,14 @@ struct AnalyticsExplorerView: View {
     }.roburCard()
   }
   private func recalculate() {
-    let result = RecoveryInsights.make(days: healthKit.dailyMetrics, workouts: healthKit.analyticsWorkouts,
-      annotations: journal.annotations, maxHR: maxHR, historyStart: healthKit.analyticsHistoryStart,
-      stepsGoal: stepsGoal, exerciseGoal: exerciseGoal, fitnessReference: healthKit.fitnessReference)
-    analysis = result
-    readings = MetricAnalytics.series(days: healthKit.dailyMetrics, workouts: healthKit.analyticsWorkouts, analysis: result)
-    highlights = MetricAnalytics.highlights(series: readings, workouts: healthKit.analyticsWorkouts, analysis: result)
+    analysisTask?.cancel()
+    let request = TrainingAnalysisRequest(days: healthKit.dailyMetrics, workouts: healthKit.analyticsWorkouts,
+      annotations: journal.annotations, maxHR: maxHR, stepsGoal: stepsGoal, exerciseGoal: exerciseGoal,
+      historyStart: healthKit.analyticsHistoryStart, fitnessReference: healthKit.fitnessReference)
+    analysisTask = Task {
+      try? await Task.sleep(for: .milliseconds(120))
+      guard !Task.isCancelled, let result = try? await TrainingAnalysisWorker.shared.analytics(request), !Task.isCancelled else { return }
+      analysis = result.analysis; readings = result.readings; highlights = result.highlights
+    }
   }
 }

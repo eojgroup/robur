@@ -28,6 +28,7 @@ struct HealthOverviewView: View {
   @State private var draftCategories: Set<TrainingCategory> = []
   @State private var draftActivities: Set<WorkoutActivity> = []
   @State private var cachedSummary: InsightsSummary?
+  @State private var analysisTask: Task<Void, Never>?
 
   private var summary: InsightsSummary {
     cachedSummary ?? TrainingInsights.make(days: [], workouts: [], annotations: [:], maxHR: maxHR)
@@ -65,15 +66,17 @@ struct HealthOverviewView: View {
     .onChange(of: maxHR) { _, _ in recalculate() }
     .onChange(of: stepsGoal) { _, _ in recalculate() }
     .onChange(of: exerciseGoal) { _, _ in recalculate() }
+    .onChange(of: healthKit.fitnessReference) { _, _ in recalculate() }
+    .onDisappear { analysisTask?.cancel() }
     .sheet(isPresented: $editingTargets) { balanceTargetEditor }
   }
 
   private var summaryStrip: some View {
     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: typeSize.isAccessibilitySize ? 1 : (widthClass == .regular ? 4 : 2)), spacing: 10) {
-      compactMetric("Recovery", value: summary.readiness.map(String.init) ?? "—", detail: summary.recoveryAnalysis.confidence, symbol: "sun.max", tint: RoburStyle.teal, score: summary.readiness)
-      compactMetric("Fitness", value: summary.fitness.map(String.init) ?? "—", detail: "Personal progress index", symbol: "heart.circle", tint: RoburStyle.blue, score: summary.fitness)
-      compactMetric("Load", value: loadComparison.changePercent.map { String(format: "%+.0f%%", $0) } ?? "—", detail: loadComparison.classification, symbol: "chart.xyaxis.line", tint: RoburStyle.orange)
-      compactMetric("Sleep", value: latestSleep?.sleepMinutes.map { String(format: "%.1fh", $0 / 60) } ?? "—", detail: latestSleep.map { $0.date.formatted(date: .abbreviated, time: .omitted) } ?? "No reading", symbol: "bed.double", tint: RoburStyle.blue)
+      compactMetric("Recovery", value: summary.readiness.map(String.init) ?? "—", detail: summary.recoveryAnalysis.confidence, symbol: "sun.max", tint: MetricColors.color("recovery"), score: summary.readiness)
+      compactMetric("Fitness", value: summary.fitness.map(String.init) ?? "—", detail: "Personal progress index", symbol: "heart.circle", tint: MetricColors.color("fitness"), score: summary.fitness)
+      compactMetric("Load", value: loadComparison.changePercent.map { String(format: "%+.0f%%", $0) } ?? "—", detail: loadComparison.classification, symbol: "chart.xyaxis.line", tint: MetricColors.color("acuteLoad"))
+      compactMetric("Sleep", value: latestSleep?.sleepMinutes.map { String(format: "%.1fh", $0 / 60) } ?? "—", detail: latestSleep.map { $0.date.formatted(date: .abbreviated, time: .omitted) } ?? "No reading", symbol: "bed.double", tint: MetricColors.color("sleep"))
     }
   }
 
@@ -143,9 +146,15 @@ struct HealthOverviewView: View {
   }
 
   private func recalculate() {
-    cachedSummary = TrainingInsights.make(days: healthKit.dailyMetrics, workouts: healthKit.analyticsWorkouts,
+    analysisTask?.cancel()
+    let request = TrainingAnalysisRequest(days: healthKit.dailyMetrics, workouts: healthKit.analyticsWorkouts,
       annotations: journal.annotations, maxHR: maxHR, stepsGoal: stepsGoal, exerciseGoal: exerciseGoal,
       historyStart: healthKit.analyticsHistoryStart, fitnessReference: healthKit.fitnessReference)
+    analysisTask = Task {
+      try? await Task.sleep(for: .milliseconds(120))
+      guard !Task.isCancelled, let result = try? await TrainingAnalysisWorker.shared.make(request), !Task.isCancelled else { return }
+      cachedSummary = result
+    }
   }
 
 
@@ -321,13 +330,7 @@ struct HealthOverviewView: View {
   }
 
   private func balanceColor(_ category: TrainingCategory) -> Color {
-    switch category {
-    case .endurance: return RoburStyle.orange
-    case .strength: return RoburStyle.blue
-    case .mobility: return RoburStyle.amber.opacity(0.55)
-    case .sport: return RoburStyle.blue.opacity(0.5)
-    case .other: return .gray
-    }
+    MetricColors.training(category)
   }
 
   private var balanceTargetEditor: some View {
@@ -512,7 +515,7 @@ struct HealthOverviewView: View {
       let weights = healthKit.fitnessReadings.filter { $0.metric == .weight }
       if !weights.isEmpty {
         Chart(weights) { reading in
-          LineMark(x: .value("Date", reading.date), y: .value("Weight", reading.value)).foregroundStyle(RoburStyle.blue)
+          LineMark(x: .value("Date", reading.date), y: .value("Weight", reading.value)).foregroundStyle(MetricColors.color("weight"))
         }.chartYScale(domain: .automatic(includesZero: false)).chartYAxisLabel("kg").frame(height: 130)
       }
       Text("Only approved HealthKit fields are shown. Apple does not expose Medical ID emergency contacts or its full card to apps. Manage your original records in Apple Health.")
@@ -571,7 +574,7 @@ struct HealthOverviewView: View {
           Spacer()
           Text(String(format: "%.1f %@", item.current, item.unit))
         }.font(.caption).foregroundStyle(.secondary)
-        ProgressView(value: Double(item.score), total: 100).tint(RoburStyle.orange)
+        ProgressView(value: Double(item.score), total: 100).tint(MetricColors.color(item.key))
         DisclosureGroup("Input & baseline") { Text(item.explanation).font(.caption).foregroundStyle(.secondary) }.font(.caption)
       }
     }

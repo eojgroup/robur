@@ -87,6 +87,8 @@ targets:
       - path: Sources/RoburShared/HealthInsights.swift
       - path: Sources/RoburShared/WidgetHealthSummary.swift
       - path: Resources/PrivacyInfo.xcprivacy
+      - path: Resources/metric-colors.json
+      - path: Sources/RoburShared/MetricColors.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.eojgroup.robur.widgets
@@ -120,6 +122,8 @@ targets:
       - path: Sources/RoburShared/HealthInsights.swift
       - path: Sources/RoburShared/WidgetHealthSummary.swift
       - path: Resources/PrivacyInfo.xcprivacy
+      - path: Resources/metric-colors.json
+      - path: Sources/RoburShared/MetricColors.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.eojgroup.robur.watchkitapp.widgets

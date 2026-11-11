@@ -1,18 +1,18 @@
 import Foundation
 
-struct WorkoutHeartSample: Hashable {
+struct WorkoutHeartSample: Hashable, Sendable {
   let date: Date
   let bpm: Double
 }
 
-struct WorkoutSplit: Hashable, Identifiable {
+struct WorkoutSplit: Hashable, Identifiable, Sendable {
   var id: Int { index }
   let index: Int
   let minutes: Double
   let distanceKm: Double
 }
 
-struct DailyHealthMetrics: Identifiable, Hashable {
+struct DailyHealthMetrics: Identifiable, Hashable, Sendable {
   var id: Date { date }
   let date: Date
   var sleepMinutes: Double? = nil

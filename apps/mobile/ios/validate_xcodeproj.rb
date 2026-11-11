@@ -73,6 +73,7 @@ project = Xcodeproj::Project.open(project_path)
   end
   resources = target.resources_build_phase.files_references.map { |file| File.basename(file.path.to_s) }
   abort "Privacy manifest is not bundled in #{name}" unless resources.include?("PrivacyInfo.xcprivacy")
+  abort "Metric palette is not bundled in #{name}" unless resources.include?("metric-colors.json")
 end
 app = project.targets.find { |target| target.name == "Robur" }
 abort "Watch companion is not embedded" unless app.copy_files_build_phases.any? { |phase| phase.files_references.any? { |file| file == project.targets.find { |target| target.name == "RoburWatch Watch App" }.product_reference } }

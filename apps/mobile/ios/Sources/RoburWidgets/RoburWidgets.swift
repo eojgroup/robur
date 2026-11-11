@@ -28,7 +28,7 @@ private struct RoburHealthWidgetView: View {
   let entry: RoburWidgetEntry
   let metric: WidgetMetric
   @Environment(\.widgetFamily) private var family
-  private let orange = Color(red: 0.96, green: 0.49, blue: 0.20)
+  private var orange: Color { MetricColors.color(metric == .recovery ? "recovery" : metric == .training ? "acuteLoad" : "cardio", scheme: .dark) }
   private var title: String { switch metric { case .recovery: return "Recovery signals"; case .training: return "Training · 7 days"; case .cardio: return "Cardio fitness" } }
   private var symbol: String { switch metric { case .recovery: return "heart.circle"; case .training: return "figure.run"; case .cardio: return "waveform.path.ecg" } }
   private var stale: Bool { entry.summary.isStale(at: entry.date) }

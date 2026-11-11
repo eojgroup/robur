@@ -282,3 +282,4 @@ function round(value: number, precision: number): number {
 }
 
 export * from "./health-cloud.js";
+export * from "./metric-style.js";

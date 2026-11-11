@@ -6,11 +6,13 @@ on:
     paths:
       - "apps/mobile/ios/**"
       - "scripts/generate-icons.mjs"
+      - "packages/core/src/metric-colors.json"
       - ".github/workflows/apple-build.yml"
   pull_request:
     paths:
       - "apps/mobile/ios/**"
       - "scripts/generate-icons.mjs"
+      - "packages/core/src/metric-colors.json"
       - ".github/workflows/apple-build.yml"
   workflow_dispatch:
     inputs:

@@ -3,7 +3,7 @@ import HealthKit
 import WatchKit
 
 private enum WatchTheme {
-  static let orange = Color(red: 1, green: 0.63, blue: 0.31)
+  static let orange = MetricColors.color("recovery", scheme: .dark)
   static let beige = Color(red: 0.96, green: 0.92, blue: 0.84)
   static let navy = Color(red: 0.055, green: 0.10, blue: 0.18)
 }
@@ -189,8 +189,8 @@ struct RoburWatchRootView: View {
 
   private var todaySection: some View {
     Section("Health today") {
-      Label(snapshot.sleepMinutes > 0 ? RoburData.duration(snapshot.sleepMinutes) : "Sleep unavailable", systemImage: "moon.fill")
-      Label(snapshot.restingHeartRateBpm > 0 ? "\(snapshot.restingHeartRateBpm) bpm resting" : "Resting HR unavailable", systemImage: "heart.fill")
+      Label(snapshot.sleepMinutes > 0 ? RoburData.duration(snapshot.sleepMinutes) : "Sleep unavailable", systemImage: "moon.fill").foregroundStyle(MetricColors.color("sleep", scheme: .dark))
+      Label(snapshot.restingHeartRateBpm > 0 ? "\(snapshot.restingHeartRateBpm) bpm resting" : "Resting HR unavailable", systemImage: "heart.fill").foregroundStyle(MetricColors.color("restingHR", scheme: .dark))
       Text(healthKit.statusText).font(.caption2).foregroundStyle(.secondary)
       Button(healthKit.authorizationRequested ? "Refresh Health" : "Connect Health") {
         if healthKit.authorizationRequested { Task { await healthKit.refreshTodaySnapshot(); await history.refresh() } }
@@ -206,7 +206,7 @@ struct RoburWatchRootView: View {
   }
   private func liveMetric(_ title: String, value: Double?, unit: String, symbol: String) -> some View {
     VStack(alignment: .leading, spacing: 3) {
-      Image(systemName: symbol).foregroundStyle(WatchTheme.orange)
+      Image(systemName: symbol).foregroundStyle(MetricColors.color(title, scheme: .dark))
       Text(value.map { String(format: "%.0f", $0) } ?? "—").font(.title3.bold()).monospacedDigit()
       Text(unit).font(.caption2).foregroundStyle(.secondary)
     }.accessibilityElement(children: .ignore).accessibilityLabel("\(title): \(value.map { String(format: "%.0f %@", $0, unit) } ?? "Unavailable")")

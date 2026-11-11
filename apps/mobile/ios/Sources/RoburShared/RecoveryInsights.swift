@@ -1,11 +1,11 @@
 import Foundation
 
-struct FitnessReference: Codable, Equatable {
+struct FitnessReference: Codable, Equatable, Sendable {
   let value: Double?
   let establishedAt: Date
 }
 
-struct RecoveryScoreComponent: Identifiable, Codable, Equatable {
+struct RecoveryScoreComponent: Identifiable, Codable, Equatable, Sendable {
   var id: String { key }
   let key: String
   let title: String
@@ -18,7 +18,7 @@ struct RecoveryScoreComponent: Identifiable, Codable, Equatable {
   let explanation: String
 }
 
-struct RecoveryHistoryPoint: Identifiable, Codable, Equatable {
+struct RecoveryHistoryPoint: Identifiable, Codable, Equatable, Sendable {
   var id: Date { date }
   let date: Date
   let recovery: Int?
@@ -31,7 +31,7 @@ struct RecoveryHistoryPoint: Identifiable, Codable, Equatable {
   let chronicLoad: Double?
 }
 
-struct RecoveryAnalysis: Codable, Equatable {
+struct RecoveryAnalysis: Codable, Equatable, Sendable {
   static let version = "robur-recovery-2.1"
   let methodologyVersion: String
   let date: Date

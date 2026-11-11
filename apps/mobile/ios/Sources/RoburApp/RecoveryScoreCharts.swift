@@ -58,7 +58,7 @@ struct RecoveryScoreCharts: View {
       }
       Spacer()
       Text((isFitness ? analysis.fitnessScore : analysis.score).map { "\($0)" } ?? "—")
-        .font(.system(.largeTitle, design: .rounded, weight: .bold)).foregroundStyle(RoburStyle.orange)
+        .font(.system(.largeTitle, design: .rounded, weight: .bold)).foregroundStyle(MetricColors.color(isFitness ? "fitness" : "recovery"))
     }
   }
 
@@ -77,9 +77,9 @@ struct RecoveryScoreCharts: View {
           ForEach(valid) { point in
             LineMark(x: .value("Date", point.date), y: .value("Score", isFitness ? point.fitness ?? 0 : point.recovery ?? 0),
               series: .value("Recorded segment", segments[point.date] ?? 0))
-              .foregroundStyle(RoburStyle.orange).lineStyle(StrokeStyle(lineWidth: 2.5))
+              .foregroundStyle(MetricColors.color(isFitness ? "fitness" : "recovery")).lineStyle(StrokeStyle(lineWidth: 2.5))
             PointMark(x: .value("Date", point.date), y: .value("Score", isFitness ? point.fitness ?? 0 : point.recovery ?? 0))
-              .foregroundStyle(RoburStyle.orange).symbolSize(points.count > 400 ? 20 : 13)
+              .foregroundStyle(MetricColors.color(isFitness ? "fitness" : "recovery")).symbolSize(points.count > 400 ? 20 : 13)
               .accessibilityLabel(point.date.formatted(date: .abbreviated, time: .omitted))
               .accessibilityValue("\(isFitness ? point.fitness ?? 0 : point.recovery ?? 0) out of 100")
           }
@@ -96,7 +96,7 @@ struct RecoveryScoreCharts: View {
       else {
         Chart(components) { item in
           BarMark(x: .value("Score points", item.contribution), y: .value("Component", item.title))
-            .foregroundStyle(RoburStyle.orange.gradient).cornerRadius(3)
+            .foregroundStyle(MetricColors.color(item.key).gradient).cornerRadius(3)
             .annotation(position: .trailing) { Text(String(format: "%.1f", item.contribution)).font(.caption2).monospacedDigit() }
         }.chartXAxisLabel("weighted points toward the overall score").frame(height: max(height, CGFloat(components.count) * 40))
         ForEach(components) { item in
@@ -123,7 +123,7 @@ struct RecoveryScoreCharts: View {
           LineMark(x: .value("Date", point.date), y: .value("Load", chronic), series: .value("Smoothing", "42 days"))
             .foregroundStyle(by: .value("Smoothing", "42 days"))
         }
-      }.chartXScale(domain: domain).chartForegroundStyleScale(["7 days": RoburStyle.orange, "42 days": RoburStyle.blue])
+      }.chartXScale(domain: domain).chartForegroundStyleScale(["7 days": MetricColors.color("acuteLoad"), "42 days": MetricColors.color("chronicLoad")])
         .chartYAxisLabel("AU/day").chartXSelection(value: $selectedDate).frame(height: height * 0.6)
       scoreHistory.frame(maxHeight: height * 0.6)
       Text("Observed session demand, exponentially smoothed over 7/42 days. These are descriptive load proxies; they do not predict injury or establish safe training thresholds.")

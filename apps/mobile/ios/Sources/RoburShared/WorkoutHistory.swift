@@ -13,13 +13,13 @@ enum HistoryRange: String, CaseIterable, Identifiable {
   }
 }
 
-enum MuscleGroup: String, CaseIterable, Codable, Identifiable {
+enum MuscleGroup: String, CaseIterable, Codable, Identifiable, Sendable {
   case chest = "Chest", back = "Back", shoulders = "Shoulders", arms = "Arms"
   case core = "Core", quads = "Quads", hamstrings = "Hamstrings", glutes = "Glutes", calves = "Calves"
   var id: String { rawValue }
 }
 
-enum WorkoutEffortSource: String, Hashable, Codable {
+enum WorkoutEffortSource: String, Hashable, Codable, Sendable {
   case reported, estimated
   var title: String {
     switch self {
@@ -43,7 +43,7 @@ struct WorkoutEffortSelection: Hashable {
   let source: WorkoutEffortSource
 }
 
-struct WorkoutRecord: Identifiable, Hashable {
+struct WorkoutRecord: Identifiable, Hashable, Sendable {
   let id: String
   let start: Date
   let end: Date
@@ -110,7 +110,7 @@ enum FitnessMetric: String, CaseIterable, Identifiable {
   }
 }
 
-struct WorkoutAnnotation: Codable, Equatable {
+struct WorkoutAnnotation: Codable, Equatable, Sendable {
   var muscles: Set<MuscleGroup> = []
   var effort: Int? = nil
   var notes = ""
