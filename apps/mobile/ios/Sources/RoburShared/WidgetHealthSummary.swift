@@ -1,6 +1,6 @@
 import Foundation
 
-struct WidgetHealthSummary: Equatable {
+struct WidgetHealthSummary: Equatable, Sendable {
   let refreshedAt: Date
   var recovery: Int? = nil
   var sleepMinutes: Double? = nil

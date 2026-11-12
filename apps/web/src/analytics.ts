@@ -68,6 +68,35 @@ export function contributionHistory(records: HealthRecord[], fitness: boolean) {
       }) }));
 }
 
+/** Bound SVG marks for long histories; daily source records stay unchanged. */
+export function aggregateContributions(values: ReturnType<typeof contributionHistory>, period: "day"|"week"|"month") {
+  if(period==="day")return values;
+  const groups=new Map<string,typeof values>();
+  for(const point of values){
+    const date=new Date(`${point.date}T12:00:00Z`);
+    if(period==="week")date.setUTCDate(date.getUTCDate()-(date.getUTCDay()+6)%7);
+    const key=period==="month"?`${point.date.slice(0,7)}-01`:date.toISOString().slice(0,10);
+    const bucket=groups.get(key)??[];bucket.push(point);groups.set(key,bucket);
+  }
+  return [...groups].sort(([a],[b])=>a.localeCompare(b)).map(([date,bucket])=>{
+    const parts=new Map<string,typeof values[number]["parts"][number]>();
+    for(const point of bucket)for(const part of point.parts){
+      const prior=parts.get(part.key);
+      parts.set(part.key,{...part,value:(prior?.value??0)+part.value/bucket.length,weight:(prior?.weight??0)+part.weight/bucket.length});
+    }
+    return {date,record:bucket[bucket.length-1].record,score:bucket.reduce((s,p)=>s+p.score,0)/bucket.length,parts:[...parts.values()]};
+  });
+}
+
+/** Binary lookup keeps pointer inspection independent of total history length. */
+export function nearestDate(dates:string[],target:number):string|undefined {
+  if(!dates.length||!Number.isFinite(target))return undefined;
+  let low=0,high=dates.length;
+  while(low<high){const mid=(low+high)>>>1;if(timestamp(dates[mid])<target)low=mid+1;else high=mid;}
+  if(low===0)return dates[0];if(low===dates.length)return dates[dates.length-1];
+  return target-timestamp(dates[low-1])<=timestamp(dates[low])-target?dates[low-1]:dates[low];
+}
+
 export function interestingPeriods(records: HealthRecord[]): Highlight[] {
   const result: Highlight[] = [];
   const recovery = comparePoints(points(records,"score","recovery"),"percent");

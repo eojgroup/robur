@@ -9,11 +9,11 @@ struct RoburHealthProvider: TimelineProvider {
   func placeholder(in context: Context) -> RoburWidgetEntry { RoburWidgetEntry(date: Date(), summary: WidgetHealthSummary(refreshedAt: Date())) }
   func getSnapshot(in context: Context, completion: @escaping (RoburWidgetEntry) -> Void) {
     if context.isPreview { completion(placeholder(in: context)); return }
-    Task { let data = await WidgetHealthReader().read(); completion(RoburWidgetEntry(date: Date(), summary: data)) }
+    Task { let data = await WidgetHealthCache.shared.read(); completion(RoburWidgetEntry(date: Date(), summary: data)) }
   }
   func getTimeline(in context: Context, completion: @escaping (Timeline<RoburWidgetEntry>) -> Void) {
     Task {
-      let data = await WidgetHealthReader().read()
+      let data = await WidgetHealthCache.shared.read()
       let now = Date()
       // A later entry hides expired values even if the system delays the next refresh.
       let expired = now.addingTimeInterval(3_601)

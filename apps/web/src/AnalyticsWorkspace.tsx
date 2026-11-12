@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { metricColor, type HealthRecord } from "@robur/core";
-import { analyticsSeries, comparePoints, contributionHistory, correlation, downloadableRows, interestingPeriods, scoreVersions, type Highlight } from "./analytics";
+import { analyticsSeries, comparePoints, contributionHistory, aggregateContributions, nearestDate, correlation, downloadableRows, interestingPeriods, scoreVersions, type Highlight } from "./analytics";
 import { groupPoints, type Point } from "./data";
 
 type Mode="overlay"|"components"|"relationship";
@@ -22,12 +22,14 @@ export function AnalyticsWorkspace({records,selectedDate,onSelect,grain="day"}: 
   const chosen=useMemo(()=>keys.flatMap(key=>{const metric=metrics.find(s=>s.key===key);return metric?[metric]:[];}),[keys,metrics]);
   const rawAllowed=new Set(chosen.map(s=>s.unit)).size<=1;
   const sharedScale=normalization==="raw"&&!rawAllowed?"percent":normalization;
-  const longest=Math.max(0,...chosen.map(s=>s.points.length));
+  const longest=useMemo(()=>Math.max(0,filtered.filter(r=>r.kind==="score").length,...chosen.map(s=>s.points.length)),[chosen,filtered]);
   const period=grain==="day"&&longest>900?(longest>3000?"month":"week"):grain;
-  const overlays=useMemo(()=>chosen.map(series=>({...series,points:groupPoints(sharedScale==="raw"?series.points:comparePoints(series.points,sharedScale),period)})),[chosen,sharedScale,period]);
+  const comparisons=useMemo(()=>new Map(chosen.map(s=>[s.key,sharedScale==="raw"?[]:comparePoints(s.points,sharedScale)])),[chosen,sharedScale]);
+  const overlays=useMemo(()=>chosen.map(series=>({...series,points:groupPoints(sharedScale==="raw"?series.points:comparisons.get(series.key)??[],period)})),[chosen,sharedScale,period,comparisons]);
   const highlights=useMemo(()=>interestingPeriods(filtered),[filtered]);
-  const contributions=useMemo(()=>contributionHistory(filtered,fitness),[filtered,fitness]);
-  const plotDates=[...new Set([...chosen.flatMap(s=>s.points.map(p=>p.date)),...contributions.map(p=>p.date)])].sort();
+  const dailyContributions=useMemo(()=>contributionHistory(filtered,fitness),[filtered,fitness]);
+  const contributions=useMemo(()=>aggregateContributions(dailyContributions,period),[dailyContributions,period]);
+  const plotDates=useMemo(()=>[...new Set([...chosen.flatMap(s=>s.points.map(p=>p.date)),...contributions.map(p=>p.date)])].sort(),[chosen,contributions]);
   const selected=selectedDate??plotDates.at(-1);
   const xMetric=metrics.find(s=>s.key===xKey),yMetric=metrics.find(s=>s.key===yKey);
   const relationship=useMemo(()=>correlation(xMetric?.points??[],yMetric?.points??[],lag),[xMetric,yMetric,lag]);
@@ -45,13 +47,13 @@ export function AnalyticsWorkspace({records,selectedDate,onSelect,grain="day"}: 
       <div className="analyticsToolbar"><label>Shared scale<select value={sharedScale} onChange={e=>setNormalization(e.target.value as typeof normalization)}><option value="percent">% change from personal baseline</option><option value="zscore">Standard deviations from baseline</option>{rawAllowed&&<option value="raw">Raw units</option>}</select></label><label className="checkRow"><input type="checkbox" checked={mark} onChange={e=>setMark(e.target.checked)}/>Highlight notable periods</label></div>
       <p className="chartFootnote">{sharedScale==="raw"?"Raw readings share the same unit. Missing observations stay empty.":"Every metric uses its own preceding 30-day baseline, with at least 7 observed dates. Today is excluded from its baseline. Raw values and units appear below; missing dates stay empty."} {period!==grain?`Long history uses ${period}ly means for performance. `:""}No units are mixed on the shared axis.</p>
       <div className="analyticsChart"><OverlayPlot series={overlays} highlights={mark?highlights:[]} dates={plotDates} selected={selected} onSelect={onSelect} unit={sharedScale==="raw"?chosen[0]?.unit??"":sharedScale==="percent"?"% from baseline":"standard deviations"} period={period}/></div>
-      <div className="metricReadings">{chosen.map(series=>{const raw=series.points.find(p=>p.date===selected);const normalized=sharedScale==="raw"?undefined:comparePoints(series.points,sharedScale).find(p=>p.date===selected);return <div key={series.key}><span><i style={{background:series.color}}/>{series.title}</span><strong>{format(raw?.value)} <small>{series.unit}</small></strong><small>{normalized?`${format(normalized.value)} ${sharedScale==="percent"?"%":"SD"} · baseline ${format(normalized.baseline)} ${series.unit} · n=${normalized.observations}`:sharedScale==="raw"?"Recorded daily reading":"More baseline data needed / no reading"}</small></div>;})}</div>
+      <div className="metricReadings">{chosen.map(series=>{const raw=series.points.find(p=>p.date===selected);const normalized=comparisons.get(series.key)?.find(p=>p.date===selected);return <div key={series.key}><span><i style={{background:series.color}}/>{series.title}</span><strong>{format(raw?.value)} <small>{series.unit}</small></strong><small>{normalized?`${format(normalized.value)} ${sharedScale==="percent"?"%":"SD"} · baseline ${format(normalized.baseline)} ${series.unit} · n=${normalized.observations}`:sharedScale==="raw"?"Recorded daily reading":"More baseline data needed / no reading"}</small></div>;})}</div>
     </>}
     {mode==="components"&&<>
       <div className="analyticsToolbar"><label>Score<select value={fitness?"fitness":"recovery"} onChange={e=>setFitness(e.target.value==="fitness")}><option value="recovery">Recovery & readiness</option><option value="fitness">Fitness progress</option></select></label><label className="checkRow"><input type="checkbox" checked={mark} onChange={e=>setMark(e.target.checked)}/>Highlight notable periods</label></div>
       <ContributionPlot points={contributions} highlights={mark?highlights:[]} selected={selected} onSelect={onSelect}/>
-      <div className="metricReadings">{contributions.find(p=>p.date===selected)?.parts.map(part=><div key={part.key}><span>{part.title}</span><strong>{format(part.value)} <small>points</small></strong><small>{format(part.weight*100,0)}% effective weight</small></div>)}</div>
-      <p className="chartFootnote">Stacked point contributions add up to the overall score, allowing rounding of ±0.5. Effective weights can change when inputs are missing. Only dates with an eligible overall score are drawn; this view uses daily records.</p>
+      <div className="metricReadings">{dailyContributions.find(p=>p.date===selected)?.parts.map(part=><div key={part.key}><span>{part.title}</span><strong>{format(part.value)} <small>points</small></strong><small>{format(part.weight*100,0)}% effective weight</small></div>)}</div>
+      <p className="chartFootnote">Stacked point contributions add up to the overall score, allowing rounding of ±0.5. Effective weights can change when inputs are missing. Only dates with an eligible overall score are drawn; this view uses {period==="day"?"daily records":`${period}ly means of observed dates`}.</p>
     </>}
     {mode==="relationship"&&<>
       <div className="relationshipControls"><label>Metric A<select value={xKey} onChange={e=>setXKey(e.target.value)}>{metrics.map(s=><option key={s.key} value={s.key}>{s.title}</option>)}</select></label><label>Metric B<select value={yKey} onChange={e=>setYKey(e.target.value)}>{metrics.map(s=><option key={s.key} value={s.key}>{s.title}</option>)}</select></label><label>Compare B<select value={lag} onChange={e=>setLag(Number(e.target.value))}>{[0,1,2,3,7].map(d=><option key={d} value={d}>{d===0?"Same day":`${d} day${d>1?"s":""} later`}</option>)}</select></label></div>
@@ -77,7 +79,7 @@ function OverlayPlot({series,highlights,dates,selected,onSelect,unit,period}:{se
   const from=dateTime(dates[0]??"2000-01-01"),to=Math.max(from+86400000,dateTime(dates.at(-1)??"2000-01-02"));
   const values=series.flatMap(s=>s.points.map(p=>p.value)),low=Math.min(0,...values),high=Math.max(1,...values),padding=(high-low)*.1;
   const x=(date:string)=>left+(dateTime(date)-from)/(to-from)*(right-left),y=(value:number)=>top+(high+padding-value)/(high-low+2*padding)*(bottom-top);
-  const selectAt=(event:React.PointerEvent<SVGSVGElement>)=>{const box=event.currentTarget.getBoundingClientRect(),pos=(event.clientX-box.left)/box.width*width;const target=from+(pos-left)/(right-left)*(to-from);const nearest=dates.reduce((prior,date)=>Math.abs(dateTime(date)-target)<Math.abs(dateTime(prior)-target)?date:prior,dates[0]);if(nearest)onSelect(nearest);};
+  const selectAt=(event:React.PointerEvent<SVGSVGElement>)=>{const box=event.currentTarget.getBoundingClientRect(),pos=(event.clientX-box.left)/box.width*width;const target=from+(pos-left)/(right-left)*(to-from);const nearest=nearestDate(dates,target);if(nearest&&nearest!==selected)onSelect(nearest);};
   if(!values.length)return <div className="chartEmpty">Choose metrics and upload enough observed history to establish their baselines.</div>;
   return <svg viewBox={`0 0 ${width} ${height}`} className="overlayPlot" role="img" aria-label={`Metric overlays, ${unit}. Inspect a date below for raw readings.`} onPointerMove={selectAt} onClick={selectAt}>
     <Bands items={highlights} x={x} height={height} left={left} right={right}/>

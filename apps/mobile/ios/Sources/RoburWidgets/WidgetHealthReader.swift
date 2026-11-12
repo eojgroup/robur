@@ -1,6 +1,23 @@
 import Foundation
 import HealthKit
 
+/// Coalesce simultaneous requests from the recovery, training and cardio widgets.
+actor WidgetHealthCache {
+  static let shared = WidgetHealthCache()
+  private var pending: Task<WidgetHealthSummary, Never>?
+  private var cached: WidgetHealthSummary?
+  func read() async -> WidgetHealthSummary {
+    if let cached, Date().timeIntervalSince(cached.refreshedAt) >= 0,
+      Date().timeIntervalSince(cached.refreshedAt) < 5 { return cached }
+    if let pending { return await pending.value }
+    let task = Task { await WidgetHealthReader().read() }
+    pending = task
+    let result = await task.value
+    cached = result; pending = nil
+    return result
+  }
+}
+
 /// Reads only types already approved in the containing app. Never prompts from a widget.
 final class WidgetHealthReader: @unchecked Sendable {
   private let store = HKHealthStore()

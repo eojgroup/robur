@@ -63,7 +63,7 @@ enum AnalyticsMetric: String, CaseIterable, Identifiable, Sendable {
   }
 }
 
-enum AnalyticsScale: String, CaseIterable, Identifiable {
+enum AnalyticsScale: String, CaseIterable, Identifiable, Sendable {
   case percent = "% from baseline", zScore = "Standard deviations", raw = "Raw units"
   var id: String { rawValue }
 }
@@ -80,7 +80,7 @@ struct AnalyticsComparedReading: Identifiable {
   let baseline: Double?
   let observations: Int
 }
-struct AnalyticsPair: Identifiable {
+struct AnalyticsPair: Identifiable, Sendable {
   var id: Date { date }
   let date: Date
   let x: Double

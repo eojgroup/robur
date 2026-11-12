@@ -40,6 +40,19 @@ const batch = () => ({ schemaVersion: 1, sourceDeviceId: "device-a", capturedAt:
   records: [{ kind: "daily", id: "today", observedAt: new Date().toISOString(), data: { steps: 9000 } }] });
 
 describe("private Health sync boundary", () => {
+  it("compresses larger dashboards while preserving private cache controls and record content", async () => {
+    const { request, pair } = await fixture(), { deviceToken } = await pair();
+    await request("/api/health/consent", deviceToken, "POST", consent);
+    const payload = batch();
+    payload.records = Array.from({length:100},(_,i)=>({ ...payload.records[0], id:`day-${i}`, data:{steps:9000+i} }));
+    await request("/api/health/sync", deviceToken, "POST", payload);
+    const response = await request("/api/health/dashboard?days=all", "web-a");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-encoding")).toBe("gzip");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect((await response.json()).records).toHaveLength(100);
+    expect((await request("/api/health/dashboard")).status).toBe(401);
+  });
   it("rejects anonymous reads, one-use code replay, mismatched devices and unconsented samples", async () => {
     const { request, pair } = await fixture();
     expect((await request("/api/status/live")).status).toBe(200);

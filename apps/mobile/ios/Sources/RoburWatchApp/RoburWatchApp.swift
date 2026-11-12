@@ -79,17 +79,19 @@ struct RoburWatchRootView: View {
         Button("Finish & save") { Task { await recorder.finish() } }
       }
       .onChange(of: recorder.phase) { _, phase in
-        if phase == .finished, let workout = recorder.lastWorkout { markPrompted(workout.id); reviewWorkout = workout; Task { await history.refresh() } }
+        if phase == .finished, let workout = recorder.lastWorkout { markPrompted(workout.id); reviewWorkout = workout; Task { await history.refresh(force: true) } }
       }
       .onChange(of: history.workouts) { _, _ in promptRecentReview() }
       .onChange(of: scenePhase) { _, phase in
-        if phase == .active { sync.activate(); Task { await history.refresh() } }
+        if phase == .active { sync.activate(); if !isActive { Task { await history.refresh() } } }
       }
       .task {
         sync.activate()
         await recorder.recoverActiveSession()
-        await healthKit.refreshTodaySnapshot()
-        if healthKit.authorizationRequested { await history.refresh() }
+        if !isActive {
+          await healthKit.refreshTodaySnapshot()
+          if healthKit.authorizationRequested { await history.refresh() }
+        }
       }
     }
   }

@@ -1,5 +1,6 @@
 import cors from "cors";
 import express, { type Express, type RequestHandler } from "express";
+import compression from "compression";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +11,7 @@ import { HttpError, object, parseConsent, parseSyncBatch, text } from "./health-
 
 export function createServer(config: ApiConfig, store: FitnessStore, authenticate: Authenticator = createAuthenticator(config.googleWebClientId, store)): Express {
   const app = express();
+  app.use(compression({ threshold: 1024, level: 4 }));
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
   if (config.corsOrigin) app.use(cors({ origin: config.corsOrigin, methods: ["GET", "POST", "DELETE"], allowedHeaders: ["Authorization", "Content-Type"] }));
@@ -121,7 +123,10 @@ export function createServer(config: ApiConfig, store: FitnessStore, authenticat
 
   const webRoot = resolve(config.webRoot ?? fileURLToPath(new URL("../../web/dist", import.meta.url)));
   if (existsSync(resolve(webRoot, "index.html"))) {
-    app.use(express.static(webRoot));
+    app.use(express.static(webRoot, { setHeaders: (res, path) => {
+      // Vite hashes asset filenames. HTML and private Health routes retain no-store.
+      if (path.includes("/assets/")) res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    } }));
     app.get("*", (_req, res) => { res.sendFile(resolve(webRoot, "index.html")); });
   }
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

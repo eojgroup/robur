@@ -8,9 +8,14 @@ final class WatchWorkoutHistory: ObservableObject {
   @Published private(set) var loading = false
   @Published private(set) var error: String?
   private let store = HKHealthStore()
+  private var lastRefresh: Date?
 
-  func refresh() async {
+  func refresh(force: Bool = false) async {
     guard !loading, HKHealthStore.isHealthDataAvailable() else { return }
+    if !force, let lastRefresh {
+      let age = Date().timeIntervalSince(lastRefresh)
+      if age >= 0 && age < 30 { return }
+    }
     loading = true
     defer { loading = false }
     do {
@@ -18,7 +23,7 @@ final class WatchWorkoutHistory: ObservableObject {
         let start = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
         let query = HKSampleQuery(sampleType: .workoutType(),
           predicate: HKQuery.predicateForSamples(withStart: start, end: Date(), options: .strictStartDate),
-          limit: HKObjectQueryNoLimit, sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)]) { _, samples, error in
+          limit: HKObjectQueryNoLimit, sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)]) { @Sendable _, samples, error in
           if let error { continuation.resume(throwing: error) }
           else { continuation.resume(returning: samples as? [HKWorkout] ?? []) }
         }
@@ -47,6 +52,7 @@ final class WatchWorkoutHistory: ObservableObject {
           averageHeartRate: nil, source: workout.sourceRevision.source.name, activityType: type)
       }
       error = nil
+      lastRefresh = Date()
     } catch {
       self.error = "Could not read workouts: \(error.localizedDescription)"
     }

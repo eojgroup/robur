@@ -5,25 +5,6 @@ private enum ExplorerMode: String, CaseIterable, Identifiable {
   case overlay = "Overlays", components = "Components", relationship = "Relationships"
   var id: String { rawValue }
 }
-private struct ExplorerPoint: Identifiable {
-  var id: String { "\(metric.rawValue)-\(date.timeIntervalSince1970)" }
-  let metric: AnalyticsMetric
-  let date: Date
-  let value: Double
-  let segment: Int
-}
-private struct ExplorerContribution: Identifiable {
-  var id: String { title }
-  let title: String
-  let value: Double
-}
-private struct ExplorerScore: Identifiable {
-  var id: Date { date }
-  let date: Date
-  let score: Double
-  let parts: [ExplorerContribution]
-}
-
 struct AnalyticsExplorerView: View {
   @EnvironmentObject private var healthKit: HealthKitClient
   @EnvironmentObject private var journal: WorkoutJournal
@@ -34,6 +15,11 @@ struct AnalyticsExplorerView: View {
   @State private var chosen: [AnalyticsMetric] = [.recovery, .acuteLoad, .hrv, .sleep]
   @State private var scale: AnalyticsScale = .percent
   @State private var analysis: RecoveryAnalysis?
+  @State private var chartData = AnalyticsChartData()
+  @State private var dataRevision = 0
+  @State private var preparingCharts = false
+  @State private var readingsByDate: [AnalyticsMetric: [Date: Double]] = [:]
+  @State private var scoresByDate: [Date: RecoveryHistoryPoint] = [:]
   @State private var analysisTask: Task<Void, Never>?
   @State private var readings: [AnalyticsMetric: [AnalyticsReading]] = [:]
   @State private var highlights: [AnalyticsHighlight] = []
@@ -45,52 +31,19 @@ struct AnalyticsExplorerView: View {
   @State private var lag = 1
   private let calendar = Calendar.current
   private var lowerBound: Date { healthKit.historyRange.startDate() ?? readings.values.compactMap { $0.first?.date }.min() ?? Date() }
-  private var inspectionDate: Date { calendar.startOfDay(for: selected ?? Date()) }
+  private var inspectionDate: Date { calendar.startOfDay(for: min(selected ?? Date(), Date())) }
   private var rawAllowed: Bool { Set(chosen.map(\.unit)).count <= 1 }
   private var effectiveScale: AnalyticsScale { scale == .raw && !rawAllowed ? .percent : scale }
   private var grain: Calendar.Component? {
     let count = calendar.dateComponents([.day], from: lowerBound, to: Date()).day ?? 0
     return count > 1800 ? .month : count > 400 ? .weekOfYear : nil
   }
-  private var plotted: [ExplorerPoint] {
-    var result: [ExplorerPoint] = []
-    for metric in chosen {
-      let values = MetricAnalytics.compare(readings[metric] ?? [], scale: effectiveScale).filter { $0.date >= lowerBound }
-      var grouped: [AnalyticsReading] = []
-      if let grain {
-        let buckets = Dictionary(grouping: values) { calendar.dateInterval(of: grain, for: $0.date)?.start ?? $0.date }
-        for date in buckets.keys.sorted() {
-          let bucket = buckets[date]!
-          grouped.append(.init(date: date, value: bucket.reduce(0) { $0 + $1.value } / Double(bucket.count)))
-        }
-      } else { grouped = values.map { .init(date: $0.date, value: $0.value) } }
-      var segment = 0, previous: Date?
-      let maxGap = grain == .month ? 40 : grain == .weekOfYear ? 9 : 2
-      for point in grouped {
-        if let previous, (calendar.dateComponents([.day], from: previous, to: point.date).day ?? 0) > maxGap { segment += 1 }
-        result.append(.init(metric: metric, date: point.date, value: point.value, segment: segment))
-        previous = point.date
-      }
-    }
-    return result
-  }
-  private var scorePoints: [RecoveryHistoryPoint] { (analysis?.history ?? []).filter { $0.date >= lowerBound && (fitness ? $0.fitness : $0.recovery) != nil } }
-  private var plottedScores: [ExplorerScore] {
-    let buckets = Dictionary(grouping: scorePoints) { point in grain.flatMap { calendar.dateInterval(of: $0, for: point.date)?.start } ?? point.date }
-    return buckets.keys.sorted().map { date in
-      let bucket = buckets[date]!, count = Double(bucket.count)
-      var values: [String: Double] = [:]
-      var total = 0.0
-      for point in bucket {
-        total += Double((fitness ? point.fitness : point.recovery) ?? 0)
-        for part in fitness ? point.fitnessComponents : point.recoveryComponents { values[part.title, default: 0] += part.contribution }
-      }
-      let parts = values.keys.sorted().map { ExplorerContribution(title: $0, value: values[$0]! / count) }
-      return ExplorerScore(date: date, score: total / count, parts: parts)
-    }
-  }
-  private var pairs: [AnalyticsPair] {
-    MetricAnalytics.paired(readings[metricA] ?? [], readings[metricB] ?? [], lagDays: lag).filter { $0.date >= lowerBound }
+  private var plotted: [AnalyticsPlotPoint] { chartData.points }
+  private var plottedScores: [AnalyticsScorePlot] { chartData.scores }
+  private var pairs: [AnalyticsPair] { chartData.pairs }
+  private var chartKey: String {
+    [String(dataRevision), chosen.map(\.rawValue).joined(separator: ","), effectiveScale.rawValue,
+      healthKit.historyRange.rawValue, String(fitness), metricA.rawValue, metricB.rawValue, String(lag)].joined(separator: "|")
   }
   private var visibleHighlights: [AnalyticsHighlight] { highlights.filter { $0.end >= lowerBound } }
 
@@ -101,6 +54,7 @@ struct AnalyticsExplorerView: View {
           VStack(alignment: .leading, spacing: 14) {
             HistoryRangePicker()
             Picker("Analysis", selection: $mode) { ForEach(ExplorerMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
+            if preparingCharts { ProgressView("Preparing charts…").font(.caption) }
             switch mode {
             case .overlay: overlay
             case .components: componentsChart
@@ -131,6 +85,7 @@ struct AnalyticsExplorerView: View {
         .onChange(of: exerciseGoal) { _, _ in recalculate() }
         .onChange(of: healthKit.historyRange) { _, _ in selected = nil; recalculate() }
         .onDisappear { analysisTask?.cancel() }
+        .task(id: chartKey) { await prepareCharts() }
     }
   }
   private var overlay: some View {
@@ -173,7 +128,7 @@ struct AnalyticsExplorerView: View {
       if let grain { Text(grain == .month ? "Monthly means for long history; inspect raw daily readings below." : "Weekly means for long history; inspect raw daily readings below.").font(.caption).foregroundStyle(.secondary) }
     }
   }
-  private func overlayDomain(_ points: [ExplorerPoint]) -> ClosedRange<Double> {
+  private func overlayDomain(_ points: [AnalyticsPlotPoint]) -> ClosedRange<Double> {
     let low = min(0, points.map(\.value).min() ?? 0), high = max(1, points.map(\.value).max() ?? 1)
     let margin = (high - low) * 0.08
     return (low - margin)...(high + margin)
@@ -211,13 +166,13 @@ struct AnalyticsExplorerView: View {
       }
     }
   }
-  private var selectedScore: RecoveryHistoryPoint? { analysis?.history.first { calendar.isDate($0.date, inSameDayAs: inspectionDate) } }
+  private var selectedScore: RecoveryHistoryPoint? { scoresByDate[inspectionDate] }
   private var relationship: some View {
     VStack(alignment: .leading, spacing: 12) {
       metricPicker("Metric A", selection: $metricA)
       metricPicker("Metric B", selection: $metricB)
       Picker("Compare B", selection: $lag) { Text("Same day").tag(0); Text("1 day later").tag(1); Text("3 days later").tag(3); Text("7 days later").tag(7) }
-      if let r = MetricAnalytics.correlation(pairs) { Text("r = \(r.formatted(.number.precision(.fractionLength(2)))) · \(pairs.count) paired dates").font(.headline).monospacedDigit() }
+      if let r = chartData.correlation { Text("r = \(r.formatted(.number.precision(.fractionLength(2)))) · \(pairs.count) paired dates").font(.headline).monospacedDigit() }
       else { Text("Correlation needs 14 paired dates with variation in both measures.").font(.caption).foregroundStyle(.secondary) }
       Chart(pairs) { pair in
         PointMark(x: .value(metricA.title, pair.x), y: .value(metricB.title, pair.y)).foregroundStyle(MetricColors.color(metricB.rawValue).opacity(0.75))
@@ -233,10 +188,10 @@ struct AnalyticsExplorerView: View {
       DatePicker("Inspect date", selection: Binding(get: { inspectionDate }, set: { selected = $0 }), in: ...Date(), displayedComponents: .date)
       LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)], alignment: .leading, spacing: 16) {
         ForEach(chosen) { metric in
-          let reading = readings[metric]?.first { calendar.isDate($0.date, inSameDayAs: inspectionDate) }
+          let reading = readingsByDate[metric]?[inspectionDate]
           VStack(alignment: .leading, spacing: 3) {
             Label { Text(metric.title) } icon: { Circle().fill(MetricColors.color(metric.rawValue)).frame(width: 7, height: 7) }.font(.caption).foregroundStyle(.secondary)
-            Text(reading.map { "\($0.value.formatted(.number.precision(.fractionLength(0...1)))) \(metric.unit)" } ?? "—").font(.headline).monospacedDigit()
+            Text(reading.map { "\($0.formatted(.number.precision(.fractionLength(0...1)))) \(metric.unit)" } ?? "—").font(.headline).monospacedDigit()
           }
         }
       }
@@ -259,6 +214,15 @@ struct AnalyticsExplorerView: View {
       Text("Descriptive patterns, not diagnoses or injury predictions.").font(.caption).foregroundStyle(.secondary)
     }.roburCard()
   }
+  private func prepareCharts() async {
+    preparingCharts = true
+    chartData = AnalyticsChartData()
+    let result = try? await TrainingAnalysisWorker.shared.charts(series: readings, history: analysis?.history ?? [],
+      metrics: chosen, scale: effectiveScale, start: lowerBound, grain: grain, fitness: fitness, x: metricA, y: metricB, lag: lag)
+    guard !Task.isCancelled else { return }
+    if let result { chartData = result }
+    preparingCharts = false
+  }
   private func recalculate() {
     analysisTask?.cancel()
     let request = TrainingAnalysisRequest(days: healthKit.dailyMetrics, workouts: healthKit.analyticsWorkouts,
@@ -268,6 +232,8 @@ struct AnalyticsExplorerView: View {
       try? await Task.sleep(for: .milliseconds(120))
       guard !Task.isCancelled, let result = try? await TrainingAnalysisWorker.shared.analytics(request), !Task.isCancelled else { return }
       analysis = result.analysis; readings = result.readings; highlights = result.highlights
+      readingsByDate = result.readingsByDate; scoresByDate = result.scoresByDate
+      dataRevision += 1
     }
   }
 }

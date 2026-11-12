@@ -14,6 +14,8 @@ struct TrainingAnalyticsSnapshot: Sendable {
   let analysis: RecoveryAnalysis
   let readings: [AnalyticsMetric: [AnalyticsReading]]
   let highlights: [AnalyticsHighlight]
+  let readingsByDate: [AnalyticsMetric: [Date: Double]]
+  let scoresByDate: [Date: RecoveryHistoryPoint]
 }
 
 /// Serializes expensive history work off the UI actor. Neighbouring screens
@@ -44,6 +46,8 @@ actor TrainingAnalysisWorker {
     let series = MetricAnalytics.series(days: request.days, workouts: request.workouts, analysis: analysis, now: now)
     let highlights = MetricAnalytics.highlights(series: series, workouts: request.workouts, analysis: analysis, now: now)
     try Task.checkCancellation()
-    return .init(analysis: analysis, readings: series, highlights: highlights)
+    return .init(analysis: analysis, readings: series, highlights: highlights,
+      readingsByDate: series.mapValues { Dictionary($0.map { ($0.date, $0.value) }, uniquingKeysWith: { _, latest in latest }) },
+      scoresByDate: Dictionary(analysis.history.map { ($0.date, $0) }, uniquingKeysWith: { _, latest in latest }))
   }
 }
